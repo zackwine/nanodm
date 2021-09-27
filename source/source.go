@@ -1,6 +1,9 @@
 package source
 
 import (
+	"fmt"
+	"time"
+
 	"github.com/sirupsen/logrus"
 	"github.com/zackwine/nanodm"
 )
@@ -18,7 +21,7 @@ type Source struct {
 	puller      *nanodm.Puller
 	pullerChan  chan nanodm.Message
 	pullerClose chan struct{}
-	ackMap      map[string]nanodm.Message
+	ackMap      *nanodm.ConcurrentMessageMap
 }
 
 type SourceInterface interface {
@@ -38,7 +41,7 @@ func NewSource(log *logrus.Entry, name string, serverUrl string, pullUrl string,
 		pusherChan:  make(chan nanodm.Message),
 		pullerChan:  make(chan nanodm.Message),
 		pullerClose: make(chan struct{}),
-		ackChan:     make(chan nanodm.Message),
+		ackMap:      nanodm.NewConcurrentMessageMap(),
 	}
 }
 
@@ -79,12 +82,38 @@ func (so *Source) Register(objects []nanodm.Object) error {
 	message := so.newMessage(nanodm.RegisterMessageType)
 	message.Objects = objects
 	so.pusherChan <- message
-	return nil
+
+	// Wait for ack
+	ackMessage, err := so.ackMap.WaitForKey(message.TransactionUID.String(), 10*time.Second)
+	if err != nil {
+		return err
+	}
+	if ackMessage.Type == nanodm.AckMessageType {
+		return nil
+	} else if ackMessage.Type == nanodm.NackMessageType {
+		return fmt.Errorf("received registration error: %v", ackMessage.Error)
+	} else {
+		return fmt.Errorf("received unknown message type (%d)", ackMessage.Type)
+	}
 }
 
 func (so *Source) Deregister() error {
-	so.pusherChan <- so.newMessage(nanodm.DeregisterMessageType)
-	return nil
+	var err error
+	deregMessage := so.newMessage(nanodm.DeregisterMessageType)
+	so.pusherChan <- deregMessage
+
+	ackMessage, err := so.ackMap.WaitForKey(deregMessage.TransactionUID.String(), 10*time.Second)
+	if err != nil {
+		return err
+	}
+	if ackMessage.Type == nanodm.AckMessageType {
+		return nil
+	} else if ackMessage.Type == nanodm.NackMessageType {
+		return fmt.Errorf("received deregistration error: %v", ackMessage.Error)
+	} else {
+		return fmt.Errorf("received unknown message type (%d)", ackMessage.Type)
+	}
+
 }
 
 func (so *Source) pullerTask() {
@@ -94,7 +123,7 @@ func (so *Source) pullerTask() {
 			so.log.Infof("%+v", message)
 			switch {
 			case message.Type == nanodm.AckMessageType || message.Type == nanodm.NackMessageType:
-				so.ackChan <- message
+				so.ackMap.Set(message.TransactionUID.String(), message)
 			case message.Type == nanodm.SetMessageType:
 				so.handleSet(message)
 			case message.Type == nanodm.GetMessageType:

@@ -4,8 +4,10 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/sirupsen/logrus"
+	"github.com/zackwine/nanodm"
 	"github.com/zackwine/nanodm/collector"
 )
 
@@ -24,6 +26,24 @@ func main() {
 	log.Info("Starting dmcollector example...")
 	server := collector.NewServer(log, url)
 	server.Start()
+
+	<-time.After(10 * time.Second)
+
+	objects, errs := server.Get([]string{"Device.DeviceInfo.Version"})
+	if len(errs) > 0 {
+		log.Errorf("Failed to get object: %v", errs)
+	}
+	log.Infof("%+v", objects)
+
+	<-time.After(1 * time.Second)
+
+	err := server.Set(nanodm.Object{
+		Name:  "Device.DeviceInfo.Version",
+		Value: "0.0.0",
+	})
+	if err != nil {
+		log.Errorf("Failed to set object: %v", err)
+	}
 
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
