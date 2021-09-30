@@ -1,4 +1,4 @@
-package collector
+package coordinator
 
 import (
 	"github.com/sirupsen/logrus"

@@ -8,40 +8,47 @@ import (
 	"github.com/zackwine/nanodm"
 )
 
+const (
+	defaultAckTimeout = 10 * time.Second
+)
+
 type Source struct {
 	log       *logrus.Entry
 	name      string
 	serverUrl string
 	pullUrl   string
-	callbacks SourceInterface
+	callbacks SourceHandler
 
-	pusher     *nanodm.Pusher
-	pusherChan chan nanodm.Message
+	pusher           *nanodm.Pusher
+	pusherChan       chan nanodm.Message
+	pusherAckTimeout time.Duration
 
 	puller      *nanodm.Puller
 	pullerChan  chan nanodm.Message
 	pullerClose chan struct{}
 	ackMap      *nanodm.ConcurrentMessageMap
+	registered  bool
 }
 
-type SourceInterface interface {
+type SourceHandler interface {
 	GetObjects(objectNames []string) (objects []nanodm.Object, err error)
 	SetObjects(objects []nanodm.Object) error
 }
 
 // NewSource creates a new source where `name` should be unique to the
 // server at `serverUrl`.
-func NewSource(log *logrus.Entry, name string, serverUrl string, pullUrl string, callbacks SourceInterface) *Source {
+func NewSource(log *logrus.Entry, name string, serverUrl string, pullUrl string, callbacks SourceHandler) *Source {
 	return &Source{
-		log:         log,
-		name:        name,
-		serverUrl:   serverUrl,
-		pullUrl:     pullUrl,
-		callbacks:   callbacks,
-		pusherChan:  make(chan nanodm.Message),
-		pullerChan:  make(chan nanodm.Message),
-		pullerClose: make(chan struct{}),
-		ackMap:      nanodm.NewConcurrentMessageMap(),
+		log:              log,
+		name:             name,
+		serverUrl:        serverUrl,
+		pullUrl:          pullUrl,
+		callbacks:        callbacks,
+		pusherAckTimeout: defaultAckTimeout,
+		pusherChan:       make(chan nanodm.Message),
+		pullerChan:       make(chan nanodm.Message),
+		pullerClose:      make(chan struct{}),
+		ackMap:           nanodm.NewConcurrentMessageMap(),
 	}
 }
 
@@ -74,7 +81,9 @@ func (so *Source) Connect() error {
 }
 
 func (so *Source) Disconnect() error {
-	so.Deregister()
+	if so.registered {
+		so.Unregister()
+	}
 	return nil
 }
 
@@ -84,8 +93,9 @@ func (so *Source) Register(objects []nanodm.Object) error {
 	so.pusherChan <- message
 
 	// Wait for ack
-	ackMessage, err := so.ackMap.WaitForKey(message.TransactionUID.String(), 10*time.Second)
+	ackMessage, err := so.ackMap.WaitForKey(message.TransactionUID.String(), so.pusherAckTimeout)
 	if err != nil {
+		so.registered = true
 		return err
 	}
 	if ackMessage.Type == nanodm.AckMessageType {
@@ -97,23 +107,43 @@ func (so *Source) Register(objects []nanodm.Object) error {
 	}
 }
 
-func (so *Source) Deregister() error {
+func (so *Source) Unregister() error {
 	var err error
-	deregMessage := so.newMessage(nanodm.DeregisterMessageType)
-	so.pusherChan <- deregMessage
+	unregMessage := so.newMessage(nanodm.UnregisterMessageType)
+	so.pusherChan <- unregMessage
+	so.registered = false
 
-	ackMessage, err := so.ackMap.WaitForKey(deregMessage.TransactionUID.String(), 10*time.Second)
+	ackMessage, err := so.ackMap.WaitForKey(unregMessage.TransactionUID.String(), so.pusherAckTimeout)
 	if err != nil {
 		return err
 	}
 	if ackMessage.Type == nanodm.AckMessageType {
 		return nil
 	} else if ackMessage.Type == nanodm.NackMessageType {
-		return fmt.Errorf("received deregistration error: %v", ackMessage.Error)
+		return fmt.Errorf("received unregistration error: %v", ackMessage.Error)
 	} else {
 		return fmt.Errorf("received unknown message type (%d)", ackMessage.Type)
 	}
 
+}
+
+func (so *Source) UpdateObjects(objects []nanodm.Object) error {
+	var err error
+	updateMessage := so.newMessage(nanodm.UpdateObjectsMessageType)
+	updateMessage.Objects = objects
+	so.pusherChan <- updateMessage
+	// Wait for ack
+	ackMessage, err := so.ackMap.WaitForKey(updateMessage.TransactionUID.String(), so.pusherAckTimeout)
+	if err != nil {
+		return err
+	}
+	if ackMessage.Type == nanodm.AckMessageType {
+		return nil
+	} else if ackMessage.Type == nanodm.NackMessageType {
+		return fmt.Errorf("received update error: %v", ackMessage.Error)
+	} else {
+		return fmt.Errorf("received unknown message type (%d)", ackMessage.Type)
+	}
 }
 
 func (so *Source) pullerTask() {

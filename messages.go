@@ -12,7 +12,8 @@ type MessageType uint
 
 const (
 	RegisterMessageType MessageType = iota
-	DeregisterMessageType
+	UnregisterMessageType
+	UpdateObjectsMessageType
 	SetMessageType
 	GetMessageType
 	AckMessageType
@@ -107,4 +108,11 @@ func (cm *ConcurrentMessageMap) WaitForKey(key string, timeout time.Duration) (*
 			return nil, fmt.Errorf("timeout waiting for (%s)", key)
 		}
 	}
+}
+
+func GetObjectsFromMap(objMap map[string]Object) (objects []Object) {
+	for _, object := range objMap {
+		objects = append(objects, object)
+	}
+	return objects
 }
