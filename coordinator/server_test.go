@@ -90,6 +90,7 @@ func TestServerRegistration(t *testing.T) {
 	serverUrl := "tcp://127.0.0.1:4500"
 	sourceName := "testSource"
 	sourceUrl := "tcp://127.0.0.1:4501"
+	sourceUrl2 := "tcp://127.0.0.1:4499"
 
 	var objectMapSource = map[string]nanodm.Object{
 		"Device.Custom.Setting1": {
@@ -132,12 +133,12 @@ func TestServerRegistration(t *testing.T) {
 		objectMap:    objectMapSource,
 		objectValues: objectValuesSource,
 	}
-	source := source.NewSource(log, sourceName, serverUrl, sourceUrl, testSource)
-	err = source.Connect()
+	src := source.NewSource(log, sourceName, serverUrl, sourceUrl, testSource)
+	err = src.Connect()
 	assert.Nil(t, err)
-	defer source.Disconnect()
+	defer src.Disconnect()
 
-	err = source.Register(nanodm.GetObjectsFromMap(objectMapSource))
+	err = src.Register(nanodm.GetObjectsFromMap(objectMapSource))
 	assert.Nil(t, err)
 
 	// Give the registration a few seconds to take
@@ -145,6 +146,21 @@ func TestServerRegistration(t *testing.T) {
 	// Verify the source is registered
 	assert.Equal(t, sourceName, testCorrdinator.registeredSource)
 	assert.Equal(t, len(objectMapSource), len(testCorrdinator.registeredObjects))
+
+	// Create a source with same name
+	testSource2 := &TestSource{
+		log:          log,
+		objectMap:    objectMapSource,
+		objectValues: objectValuesSource,
+	}
+	src2 := source.NewSource(log, sourceName, serverUrl, sourceUrl2, testSource2)
+	err = src2.Connect()
+	assert.Nil(t, err)
+
+	testCorrdinator.registeredSource = ""
+	err = src2.Register(nanodm.GetObjectsFromMap(objectMapSource))
+	assert.NotNil(t, err)
+	assert.Equal(t, "", testCorrdinator.registeredSource)
 }
 
 func TestServerUnregistration(t *testing.T) {
