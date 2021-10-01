@@ -2,9 +2,11 @@
 
 A nanomsg based data model library.  Allows multiple sources to feed a single data model.
 
+
 ## Overview
 
 Multiple data model `sources` can be implemented and connected to the `coordinator server` to implement a data model.  The coordinator server then knows how to route `Get` and `Set` requests to the source that handles each `data model object`.
+
 
 ## A bit about routing
 
@@ -19,6 +21,7 @@ If the following sources were registered with the coordinator server:
      * `Device.WiFi.Radio.0.Enable`
 
 Any calls to get/set the object `Device.DeviceInfo.MemoryStatus.Total` would be routed to `source 1` and any calls to get/set the object `Device.WiFi.RadioNumberOfEntries` would be routed to `source 2`.
+
 
 ## Source Example
 
@@ -75,7 +78,7 @@ func (ch *ExampleCoordinator) Unregistered(server *coordinator.Server, sourceNam
 	return nil
 }
 
-func (ch *ExampleCoordinator) UpdateObjects(server *coordinator.Server, sourceName string, objects []nanodm.Object) error {
+func (ch *ExampleCoordinator) UpdateObjects(server *Server, sourceName string, objects []nanodm.Object, deletedObjects map[string]nanodm.Object) error {
 	return nil
 }
 
@@ -92,4 +95,13 @@ exCoordinator := &ExampleCoordinator{}
 
 server := coordinator.NewServer(log, url, exCoordinator)
 err := server.Start()
+```
+
+
+## Development
+
+Running tests:
+
+```
+go test ./... 
 ```

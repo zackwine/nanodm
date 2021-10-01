@@ -17,7 +17,7 @@ func TestPusherPuller(t *testing.T) {
 	logrus.SetLevel(logrus.DebugLevel)
 	log := logrus.NewEntry(logrus.New())
 
-	uri := "tcp://127.0.0.1:4500"
+	uri := "tcp://127.0.0.1:4400"
 
 	pullerChan := make(chan Message)
 	puller := NewPuller(log, uri, pullerChan)

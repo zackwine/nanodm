@@ -17,7 +17,7 @@ type Source struct {
 	name      string
 	serverUrl string
 	pullUrl   string
-	callbacks SourceHandler
+	handler   SourceHandler
 
 	pusher           *nanodm.Pusher
 	pusherChan       chan nanodm.Message
@@ -37,13 +37,13 @@ type SourceHandler interface {
 
 // NewSource creates a new source where `name` should be unique to the
 // server at `serverUrl`.
-func NewSource(log *logrus.Entry, name string, serverUrl string, pullUrl string, callbacks SourceHandler) *Source {
+func NewSource(log *logrus.Entry, name string, serverUrl string, pullUrl string, handler SourceHandler) *Source {
 	return &Source{
 		log:              log,
 		name:             name,
 		serverUrl:        serverUrl,
 		pullUrl:          pullUrl,
-		callbacks:        callbacks,
+		handler:          handler,
 		pusherAckTimeout: defaultAckTimeout,
 		pusherChan:       make(chan nanodm.Message),
 		pullerChan:       make(chan nanodm.Message),
@@ -60,6 +60,10 @@ func (so *Source) newMessage(msgType nanodm.MessageType) nanodm.Message {
 		Destination:    so.serverUrl,
 		TransactionUID: nanodm.GetTransactionUID(),
 	}
+}
+
+func (so *Source) SetHandler(handler SourceHandler) {
+	so.handler = handler
 }
 
 func (so *Source) Connect() error {
@@ -168,7 +172,15 @@ func (so *Source) pullerTask() {
 }
 
 func (so *Source) handleSet(setMessage nanodm.Message) {
-	err := so.callbacks.SetObjects(setMessage.Objects)
+	if so.handler == nil {
+		nackMessasge := so.newMessage(nanodm.NackMessageType)
+		nackMessasge.TransactionUID = getMessage.TransactionUID
+		nackMessasge.Error = "source handler not set"
+		so.pusherChan <- nackMessasge
+		return
+	}
+
+	err := so.handler.SetObjects(setMessage.Objects)
 	if err != nil {
 		nackMessasge := so.newMessage(nanodm.NackMessageType)
 		nackMessasge.TransactionUID = setMessage.TransactionUID
@@ -182,12 +194,21 @@ func (so *Source) handleSet(setMessage nanodm.Message) {
 }
 
 func (so *Source) handleGet(getMessage nanodm.Message) {
+
+	if so.handler == nil {
+		nackMessasge := so.newMessage(nanodm.NackMessageType)
+		nackMessasge.TransactionUID = getMessage.TransactionUID
+		nackMessasge.Error = "source handler not set"
+		so.pusherChan <- nackMessasge
+		return
+	}
+
 	objectNames := make([]string, 0)
 
 	for _, object := range getMessage.Objects {
 		objectNames = append(objectNames, object.Name)
 	}
-	objects, err := so.callbacks.GetObjects(objectNames)
+	objects, err := so.handler.GetObjects(objectNames)
 	if err != nil {
 		nackMessasge := so.newMessage(nanodm.NackMessageType)
 		nackMessasge.TransactionUID = getMessage.TransactionUID

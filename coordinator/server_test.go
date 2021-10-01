@@ -68,7 +68,7 @@ func (ch *TestCoordinator) Unregistered(server *Server, sourceName string, objec
 	return nil
 }
 
-func (ch *TestCoordinator) UpdateObjects(server *Server, sourceName string, objects []nanodm.Object) error {
+func (ch *TestCoordinator) UpdateObjects(server *Server, sourceName string, objects []nanodm.Object, deletedObjects map[string]nanodm.Object) error {
 	ch.log.Infof("UpdateObjects called for source %s", sourceName)
 	ch.updatedSource = sourceName
 	ch.updatedObjects = objects

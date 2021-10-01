@@ -39,6 +39,10 @@ func NewServer(log *logrus.Entry, url string, handler CoordinatorHandler) *Serve
 		ackMap:     nanodm.NewConcurrentMessageMap(),
 	}
 }
+func (se *Server) SetHandler(handler CoordinatorHandler) {
+	se.handler = handler
+}
+
 func (se *Server) Start() error {
 	var err error
 	se.puller = nanodm.NewPuller(se.log, se.url, se.pullerChan)
@@ -238,7 +242,10 @@ func (se *Server) registerClient(message nanodm.Message) {
 	ackMessage.Source = se.url
 	newClient.Send(ackMessage)
 
-	se.handler.Registered(se, message.SourceName, message.Objects)
+	if se.handler != nil {
+		se.handler.Registered(se, message.SourceName, message.Objects)
+	}
+
 }
 
 func (se *Server) isObjectRegistered(objectName string) bool {
@@ -271,9 +278,11 @@ func (se *Server) addObjects(client *Client, objects []nanodm.Object) error {
 
 func (se *Server) unregisterClient(message nanodm.Message) {
 	if client, exists := se.clients[message.SourceName]; exists {
-		err := se.handler.Unregistered(se, client.sourceName, client.objects)
-		if err != nil {
-			se.log.Errorf("failed in unregister callback: %v", err)
+		if se.handler != nil {
+			err := se.handler.Unregistered(se, client.sourceName, client.objects)
+			if err != nil {
+				se.log.Errorf("failed in unregister callback: %v", err)
+			}
 		}
 		se.removeObjects(client)
 		delete(se.clients, message.SourceName)
@@ -308,6 +317,8 @@ func (se *Server) updateObjects(message nanodm.Message) {
 	// Create maps for sorting objects
 	existingMap := make(map[string]nanodm.Object)
 	newMap := make(map[string]nanodm.Object)
+	deletedMap := make(map[string]nanodm.Object)
+
 	for _, updatedObject := range message.Objects {
 		se.log.Infof("Checking updated object (%s)", updatedObject.Name)
 		if existingObject, ok := se.objects[updatedObject.Name]; ok {
@@ -331,6 +342,7 @@ func (se *Server) updateObjects(message nanodm.Message) {
 			se.objects[oldObject.Name].object = existingMap[oldObject.Name]
 		} else {
 			// Delete objects missing from the new updated list
+			deletedMap[oldObject.Name] = oldObject
 			delete(se.objects, oldObject.Name)
 		}
 	}
@@ -349,5 +361,7 @@ func (se *Server) updateObjects(message nanodm.Message) {
 	ackMessage.Source = se.url
 	client.Send(ackMessage)
 
-	se.handler.UpdateObjects(se, client.sourceName, client.objects)
+	if se.handler != nil {
+		se.handler.UpdateObjects(se, client.sourceName, client.objects, deletedMap)
+	}
 }

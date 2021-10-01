@@ -8,5 +8,5 @@ type CoordinatorHandler interface {
 	// Called when a a client/source goes offline
 	Unregistered(server *Server, sourceName string, objects []nanodm.Object) error
 	// Called when a client/source updates its supported objects
-	UpdateObjects(server *Server, sourceName string, objects []nanodm.Object) error
+	UpdateObjects(server *Server, sourceName string, objects []nanodm.Object, deletedObjects map[string]nanodm.Object) error
 }

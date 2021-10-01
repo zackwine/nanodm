@@ -33,7 +33,7 @@ func (ch *ExampleCoordinator) Unregistered(server *coordinator.Server, sourceNam
 	return nil
 }
 
-func (ch *ExampleCoordinator) UpdateObjects(server *coordinator.Server, sourceName string, objects []nanodm.Object) error {
+func (ch *ExampleCoordinator) UpdateObjects(server *coordinator.Server, sourceName string, objects []nanodm.Object, deletedObjects map[string]nanodm.Object) error {
 	ch.log.Infof("UpdateObjects called for source %s", sourceName)
 	go ch.printObjects(server)
 	return nil
