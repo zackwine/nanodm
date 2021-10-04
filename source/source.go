@@ -174,7 +174,7 @@ func (so *Source) pullerTask() {
 func (so *Source) handleSet(setMessage nanodm.Message) {
 	if so.handler == nil {
 		nackMessasge := so.newMessage(nanodm.NackMessageType)
-		nackMessasge.TransactionUID = getMessage.TransactionUID
+		nackMessasge.TransactionUID = setMessage.TransactionUID
 		nackMessasge.Error = "source handler not set"
 		so.pusherChan <- nackMessasge
 		return

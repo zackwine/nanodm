@@ -27,6 +27,13 @@ const (
 	TypeInt
 	TypeUnsignedInt
 	TypeBool
+	TypeDateTime
+	TypeBase64
+	TypeLong
+	TypeUnsignedLong
+	TypeFloat
+	TypeDouble
+	TypeByte
 	TypeNil
 )
 
