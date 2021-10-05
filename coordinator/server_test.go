@@ -474,3 +474,84 @@ func TestServerUpdate(t *testing.T) {
 	assert.Equal(t, len(objectMapSource), len(server.objects))
 
 }
+
+func TestServerClientGet(t *testing.T) {
+
+	serverUrl := "tcp://127.0.0.1:4510"
+	sourceName := "testSource"
+	sourceUrl := "tcp://127.0.0.1:4511"
+	sourceName2 := "testSource2"
+	sourceUrl2 := "tcp://127.0.0.1:4512"
+
+	var objectMapSource = map[string]nanodm.Object{
+		"Device.Custom.Setting1": {
+			Name:   "Device.Custom.Setting1",
+			Access: nanodm.AccessRW,
+			Type:   nanodm.TypeString,
+		},
+		"Device.Custom.Setting2": {
+			Name:   "Device.Custom.Setting2",
+			Access: nanodm.AccessRW,
+			Type:   nanodm.TypeInt,
+		},
+		"Device.Custom.Version": {
+			Name:   "Device.Custom.Version",
+			Access: nanodm.AccessRO,
+			Type:   nanodm.TypeString,
+		},
+	}
+
+	var objectValuesSource = map[string]interface{}{
+		"Device.Custom.Setting1": "8.8.8.8",
+		"Device.Custom.Setting2": 600,
+		"Device.Custom.Version":  "2.3.4",
+	}
+
+	log := getLogger()
+
+	// Create a coordinator server
+	testCorrdinator := &TestCoordinator{
+		log: log,
+	}
+	server := NewServer(log, serverUrl, testCorrdinator)
+	err := server.Start()
+	assert.Nil(t, err)
+	defer server.Stop()
+
+	// Create a test source
+	testSource := &TestSource{
+		log:          log,
+		objectMap:    objectMapSource,
+		objectValues: objectValuesSource,
+	}
+	src1 := source.NewSource(log, sourceName, serverUrl, sourceUrl, testSource)
+	err = src1.Connect()
+	assert.Nil(t, err)
+	defer src1.Disconnect()
+
+	err = src1.Register(nanodm.GetObjectsFromMap(objectMapSource))
+	assert.Nil(t, err)
+
+	src2 := source.NewSource(log, sourceName2, serverUrl, sourceUrl2, nil)
+	err = src2.Connect()
+	assert.Nil(t, err)
+	defer src2.Disconnect()
+
+	err = src2.Register(nil)
+	assert.Nil(t, err)
+
+	// Give the registration a few seconds to take
+	<-time.After(2 * time.Second)
+
+	gotObjects, err := src2.GetObjects([]nanodm.Object{{
+		Name:   "Device.Custom.Version",
+		Access: nanodm.AccessRO,
+		Type:   nanodm.TypeString,
+	}})
+
+	// Verify get worked as expected
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(gotObjects))
+	assert.Equal(t, objectValuesSource["Device.Custom.Version"], gotObjects[0].Value)
+
+}

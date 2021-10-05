@@ -112,8 +112,9 @@ func (se *Server) Get(objectNames []string) (objects []nanodm.Object, errs []err
 		if err != nil {
 			errs = append(errs, err)
 		}
-
-		objects = append(objects, retObjects...)
+		if retObjects != nil {
+			objects = append(objects, retObjects...)
+		}
 	}
 
 	return objects, errs
@@ -140,7 +141,7 @@ func (se *Server) getSource(sourceName string, getObjects []nanodm.Object) (obje
 
 		ackMessage, err := se.ackMap.WaitForKey(getMessage.TransactionUID.String(), 10*time.Second)
 		if err != nil {
-			return ackMessage.Objects, err
+			return nil, err
 		}
 		if ackMessage.Type == nanodm.AckMessageType {
 			return ackMessage.Objects, nil
@@ -168,10 +169,10 @@ func (se *Server) handleMessage(message nanodm.Message) {
 		se.updateObjects(message)
 	case message.Type == nanodm.GetMessageType:
 		se.log.Infof("Get message from client (%s)", message.SourceName)
-		//TODO: allow client to get other clients
+		go se.handleClientGet(message)
 	case message.Type == nanodm.SetMessageType:
 		se.log.Infof("Set message from client (%s)", message.SourceName)
-		//TODO: allow client to set other clients
+		go se.handleClientSet(message)
 	case message.Type == nanodm.AckMessageType || message.Type == nanodm.NackMessageType:
 		se.ackMap.Set(message.TransactionUID.String(), message)
 	}
@@ -363,5 +364,74 @@ func (se *Server) updateObjects(message nanodm.Message) {
 
 	if se.handler != nil {
 		se.handler.UpdateObjects(se, client.sourceName, client.objects, deletedMap)
+	}
+}
+
+func (se *Server) handleClientGet(message nanodm.Message) {
+	var objNames []string
+	if client, exists := se.clients[message.SourceName]; exists {
+		if message.Objects == nil || len(message.Objects) == 0 {
+			se.log.Errorf("Invalid get request with empty objects list")
+			se.respondNack(client, message, "Invalid get request with empty objects list")
+			return
+		}
+
+		for _, obj := range message.Objects {
+			objNames = append(objNames, obj.Name)
+		}
+		objects, err := se.Get(objNames)
+		if err != nil {
+			errStr := fmt.Sprintf("Failed to get objects with %v", err)
+			se.log.Errorf(errStr)
+			se.respondNack(client, message, errStr)
+			return
+		}
+		ackMessage := client.GetMessage(nanodm.AckMessageType)
+		ackMessage.TransactionUID = message.TransactionUID
+		ackMessage.Source = se.url
+		ackMessage.Objects = objects
+		client.Send(ackMessage)
+	} else {
+		se.log.Errorf("Error get client (%s) it isn't a registered client? %+v", message.SourceName, message)
+	}
+}
+
+func (se *Server) handleClientSet(message nanodm.Message) {
+	var err error
+	var errStr string
+	var failedObjects []nanodm.Object
+
+	if client, exists := se.clients[message.SourceName]; exists {
+		if message.Objects == nil || len(message.Objects) == 0 {
+			se.log.Errorf("Invalid set request with empty objects list")
+			se.respondNack(client, message, "Invalid set request with empty objects list")
+			return
+		}
+
+		for _, object := range message.Objects {
+			err = se.Set(object)
+			if err != nil {
+				errStr = fmt.Sprintf("%s %s;", errStr, err.Error())
+				failedObjects = append(failedObjects, object)
+			}
+		}
+
+		if errStr != "" {
+			se.log.Errorf("Failed to set objects: %s", errStr)
+			nackMessage := client.GetMessage(nanodm.NackMessageType)
+			nackMessage.TransactionUID = message.TransactionUID
+			nackMessage.Source = se.url
+			nackMessage.Objects = failedObjects
+			client.Send(nackMessage)
+		}
+
+		ackMessage := client.GetMessage(nanodm.AckMessageType)
+		ackMessage.TransactionUID = message.TransactionUID
+		ackMessage.Source = se.url
+		ackMessage.Destination = message.Source
+		client.Send(ackMessage)
+
+	} else {
+		se.log.Errorf("Error set client (%s) it isn't a registered client? %+v", message.SourceName, message)
 	}
 }

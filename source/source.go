@@ -150,6 +150,46 @@ func (so *Source) UpdateObjects(objects []nanodm.Object) error {
 	}
 }
 
+func (so *Source) GetObjects(objects []nanodm.Object) ([]nanodm.Object, error) {
+	var err error
+	getMessage := so.newMessage(nanodm.GetMessageType)
+	getMessage.Objects = objects
+
+	so.pusherChan <- getMessage
+	// Wait for ack
+	ackMessage, err := so.ackMap.WaitForKey(getMessage.TransactionUID.String(), so.pusherAckTimeout)
+	if err != nil {
+		return nil, err
+	}
+	if ackMessage.Type == nanodm.AckMessageType {
+		return ackMessage.Objects, nil
+	} else if ackMessage.Type == nanodm.NackMessageType {
+		return ackMessage.Objects, fmt.Errorf("received get error: %v", ackMessage.Error)
+	} else {
+		return ackMessage.Objects, fmt.Errorf("received unknown message type (%d)", ackMessage.Type)
+	}
+}
+
+func (so *Source) SetObject(object nanodm.Object) error {
+	var err error
+	setMessage := so.newMessage(nanodm.SetMessageType)
+	setMessage.Objects = []nanodm.Object{object}
+
+	so.pusherChan <- setMessage
+	// Wait for ack
+	ackMessage, err := so.ackMap.WaitForKey(setMessage.TransactionUID.String(), so.pusherAckTimeout)
+	if err != nil {
+		return err
+	}
+	if ackMessage.Type == nanodm.AckMessageType {
+		return nil
+	} else if ackMessage.Type == nanodm.NackMessageType {
+		return fmt.Errorf("received set error: %v", ackMessage.Error)
+	} else {
+		return fmt.Errorf("received unknown message type (%d)", ackMessage.Type)
+	}
+}
+
 func (so *Source) pullerTask() {
 	for {
 		select {
