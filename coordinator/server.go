@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -17,9 +18,10 @@ type Server struct {
 	pullerChan chan nanodm.Message
 	closeChan  chan struct{}
 
-	clients map[string]*Client
-	objects map[string]*CoordinatorObject
-	ackMap  *nanodm.ConcurrentMessageMap
+	clients      map[string]*Client
+	objects      map[string]*CoordinatorObject
+	dynamicLists map[string]*CoordinatorObject
+	ackMap       *nanodm.ConcurrentMessageMap
 }
 
 type CoordinatorObject struct {
@@ -29,14 +31,15 @@ type CoordinatorObject struct {
 
 func NewServer(log *logrus.Entry, url string, handler CoordinatorHandler) *Server {
 	return &Server{
-		log:        log,
-		url:        url,
-		handler:    handler,
-		pullerChan: make(chan nanodm.Message),
-		closeChan:  make(chan struct{}),
-		clients:    make(map[string]*Client),
-		objects:    make(map[string]*CoordinatorObject),
-		ackMap:     nanodm.NewConcurrentMessageMap(),
+		log:          log,
+		url:          url,
+		handler:      handler,
+		pullerChan:   make(chan nanodm.Message),
+		closeChan:    make(chan struct{}),
+		clients:      make(map[string]*Client),
+		objects:      make(map[string]*CoordinatorObject),
+		dynamicLists: make(map[string]*CoordinatorObject),
+		ackMap:       nanodm.NewConcurrentMessageMap(),
 	}
 }
 func (se *Server) SetHandler(handler CoordinatorHandler) {
@@ -99,6 +102,10 @@ func (se *Server) Get(objectNames []string) (objects []nanodm.Object, errs []err
 	for _, objName := range objectNames {
 		if cobject, ok := se.objects[objName]; ok {
 			clientToObject[cobject.client.sourceName] = append(clientToObject[cobject.client.sourceName], cobject.object)
+		} else if dynamicObject, exists := se.dynamicLists[objName]; exists {
+			se.log.Infof("dynamicObject: %+v", dynamicObject)
+			se.log.Infof("clientToObject: %+v", clientToObject)
+			clientToObject[dynamicObject.client.sourceName] = append(clientToObject[dynamicObject.client.sourceName], dynamicObject.object)
 		} else {
 			errs = append(errs, fmt.Errorf("object (%s) doesn't exist", objName))
 		}
@@ -253,6 +260,26 @@ func (se *Server) isObjectRegistered(objectName string) bool {
 	if _, ok := se.objects[objectName]; ok {
 		return true
 	}
+	if _, ok := se.dynamicLists[objectName]; ok {
+		return true
+	}
+	return false
+}
+
+func (se *Server) isDynamicListConflicting(dynamicListPrefix string) bool {
+
+	for objName := range se.objects {
+		if strings.Contains(objName, dynamicListPrefix) {
+			return true
+		}
+	}
+
+	for prefixName := range se.dynamicLists {
+		if strings.Contains(prefixName, dynamicListPrefix) {
+			return true
+		}
+	}
+
 	return false
 }
 
@@ -262,15 +289,26 @@ func (se *Server) addObjects(client *Client, objects []nanodm.Object) error {
 		if se.isObjectRegistered(object.Name) {
 			return fmt.Errorf("failed to add objects object (%s) already exists", object.Name)
 		}
+		if object.Type == nanodm.TypeDynamicList {
+			se.isDynamicListConflicting(object.Name)
+		}
 	}
 
 	client.objects = objects
 
 	for _, object := range objects {
-		//se.log.Debugf("Registering object (%+v)", object)
-		se.objects[object.Name] = &CoordinatorObject{
-			object: object,
-			client: client,
+		if object.Type == nanodm.TypeDynamicList {
+			//se.log.Debugf("Registering object (%+v)", object)
+			se.dynamicLists[object.Name] = &CoordinatorObject{
+				object: object,
+				client: client,
+			}
+		} else {
+			//se.log.Debugf("Registering object (%+v)", object)
+			se.objects[object.Name] = &CoordinatorObject{
+				object: object,
+				client: client,
+			}
 		}
 	}
 
@@ -302,7 +340,12 @@ func (se *Server) unregisterClient(message nanodm.Message) {
 func (se *Server) removeObjects(client *Client) {
 	// remove all objects owned by this client
 	for _, object := range client.objects {
-		delete(se.objects, object.Name)
+		if object.Type == nanodm.TypeDynamicList {
+			delete(se.dynamicLists, object.Name)
+		} else {
+			delete(se.objects, object.Name)
+		}
+
 	}
 }
 
@@ -322,7 +365,21 @@ func (se *Server) updateObjects(message nanodm.Message) {
 
 	for _, updatedObject := range message.Objects {
 		se.log.Infof("Checking updated object (%s)", updatedObject.Name)
-		if existingObject, ok := se.objects[updatedObject.Name]; ok {
+		if updatedObject.Type == nanodm.TypeDynamicList {
+			if existingDynamic, exists := se.dynamicLists[updatedObject.Name]; exists {
+				// Are these updated objects registed with another client
+				if existingDynamic.client.sourceName != message.SourceName {
+					errStr := fmt.Sprintf("failed to add objects object (%s) already exists and is owned by %s", updatedObject.Name, existingDynamic.client.sourceName)
+					se.log.Error(errStr)
+					se.respondNack(client, message, errStr)
+					return
+				}
+				existingMap[updatedObject.Name] = updatedObject
+			} else {
+				newMap[updatedObject.Name] = updatedObject
+			}
+
+		} else if existingObject, ok := se.objects[updatedObject.Name]; ok {
 			// Are these updated objects registed with another client
 			if existingObject.client.sourceName != message.SourceName {
 				errStr := fmt.Sprintf("failed to add objects object (%s) already exists and is owned by %s", updatedObject.Name, existingObject.client.sourceName)
@@ -339,21 +396,39 @@ func (se *Server) updateObjects(message nanodm.Message) {
 	// Update existing objects, and remove missing objects
 	for _, oldObject := range client.objects {
 		if _, exists := existingMap[oldObject.Name]; exists {
-			// Update existing objects
-			se.objects[oldObject.Name].object = existingMap[oldObject.Name]
+			if oldObject.Type == nanodm.TypeDynamicList {
+				// Update existing objects
+				se.dynamicLists[oldObject.Name].object = existingMap[oldObject.Name]
+			} else {
+				// Update existing objects
+				se.objects[oldObject.Name].object = existingMap[oldObject.Name]
+			}
+
 		} else {
 			// Delete objects missing from the new updated list
 			deletedMap[oldObject.Name] = oldObject
-			delete(se.objects, oldObject.Name)
+			if oldObject.Type == nanodm.TypeDynamicList {
+				delete(se.dynamicLists, oldObject.Name)
+			} else {
+				delete(se.objects, oldObject.Name)
+			}
 		}
 	}
 
 	// Add new objects
 	for objectName, newObject := range newMap {
-		se.objects[objectName] = &CoordinatorObject{
-			object: newObject,
-			client: client,
+		if newObject.Type == nanodm.TypeDynamicList {
+			se.dynamicLists[objectName] = &CoordinatorObject{
+				object: newObject,
+				client: client,
+			}
+		} else {
+			se.objects[objectName] = &CoordinatorObject{
+				object: newObject,
+				client: client,
+			}
 		}
+
 	}
 	client.objects = message.Objects
 

@@ -34,7 +34,7 @@ const (
 	TypeFloat
 	TypeDouble
 	TypeByte
-	TypeNil
+	TypeDynamicList ObjectType = 100000000
 )
 
 type ObjectAccess uint
