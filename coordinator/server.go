@@ -69,16 +69,19 @@ func (se *Server) Stop() error {
 func (se *Server) Set(object nanodm.Object) error {
 	var setMessage nanodm.Message
 	if cobject, ok := se.objects[object.Name]; ok {
-		if cobject.object.Access != nanodm.AccessRW {
-			return fmt.Errorf("the object %s isn't read-write", object.Name)
-		}
 		se.log.Infof("Calling Set on object (%+v) %+v", object, cobject.object)
 		setMessage = cobject.client.GetMessage(nanodm.SetMessageType)
 		setMessage.Source = se.url
 		setMessage.Objects = []nanodm.Object{object}
 		cobject.client.Send(setMessage)
+	} else if dynObject := se.isObjectHandledByDynamicList(object.Name); dynObject != nil {
+		se.log.Infof("Calling Set on object on dynamic list object (%+v) %+v", object, dynObject.object)
+		setMessage = dynObject.client.GetMessage(nanodm.SetMessageType)
+		setMessage.Source = se.url
+		setMessage.Objects = []nanodm.Object{object}
+		dynObject.client.Send(setMessage)
 	} else {
-		return fmt.Errorf("the object %s doesn't exist", object.Name)
+		return fmt.Errorf("the object %s isn't registered", object.Name)
 	}
 
 	ackMessage, err := se.ackMap.WaitForKey(setMessage.TransactionUID.String(), 10*time.Second)
@@ -106,6 +109,8 @@ func (se *Server) Get(objectNames []string) (objects []nanodm.Object, errs []err
 			se.log.Infof("dynamicObject: %+v", dynamicObject)
 			se.log.Infof("clientToObject: %+v", clientToObject)
 			clientToObject[dynamicObject.client.sourceName] = append(clientToObject[dynamicObject.client.sourceName], dynamicObject.object)
+		} else if dynamicObject := se.isObjectHandledByDynamicList(objName); dynamicObject != nil {
+			clientToObject[dynamicObject.client.sourceName] = append(clientToObject[dynamicObject.client.sourceName], nanodm.Object{Name: objName})
 		} else {
 			errs = append(errs, fmt.Errorf("object (%s) doesn't exist", objName))
 		}
@@ -214,7 +219,9 @@ func (se *Server) registerClient(message nanodm.Message) {
 		return
 	}
 
-	if _, ok := se.clients[message.SourceName]; ok {
+	existingClient, clientExists := se.clients[message.SourceName]
+	if clientExists && existingClient.clientUrl != newClient.clientUrl {
+
 		errStr := fmt.Sprintf("error source name (%s) already exists", message.SourceName)
 		se.log.Error(errStr)
 		se.respondNack(newClient, message, errStr)
@@ -226,6 +233,11 @@ func (se *Server) registerClient(message nanodm.Message) {
 		}()
 
 		return
+	}
+
+	if clientExists {
+		se.log.Infof("Reregistering client (%s)", message.SourceName)
+		se.removeObjects(existingClient)
 	}
 
 	err = se.addObjects(newClient, message.Objects)
@@ -242,7 +254,7 @@ func (se *Server) registerClient(message nanodm.Message) {
 		return
 	}
 
-	se.log.Infof("Registered new client (%s)", message.SourceName)
+	se.log.Infof("Registered client (%s)", message.SourceName)
 	se.clients[message.SourceName] = newClient
 
 	ackMessage := newClient.GetMessage(nanodm.AckMessageType)
@@ -509,4 +521,17 @@ func (se *Server) handleClientSet(message nanodm.Message) {
 	} else {
 		se.log.Errorf("Error set client (%s) it isn't a registered client? %+v", message.SourceName, message)
 	}
+}
+
+// isObjectHandledByDynamicList searches the dynamic object list of prefixes to
+// see if `objectName` is handled by a dynamic list.  Returns the dynamic object
+// if found, and nil otherwise
+func (se *Server) isObjectHandledByDynamicList(objectName string) *CoordinatorObject {
+	for dynObjName, dynObject := range se.dynamicLists {
+		if strings.HasPrefix(objectName, dynObjName) {
+			// if objectName has the prefix dynObjName, then return
+			return dynObject
+		}
+	}
+	return nil
 }

@@ -99,10 +99,10 @@ func (so *Source) Register(objects []nanodm.Object) error {
 	// Wait for ack
 	ackMessage, err := so.ackMap.WaitForKey(message.TransactionUID.String(), so.pusherAckTimeout)
 	if err != nil {
-		so.registered = true
 		return err
 	}
 	if ackMessage.Type == nanodm.AckMessageType {
+		so.registered = true
 		return nil
 	} else if ackMessage.Type == nanodm.NackMessageType {
 		return fmt.Errorf("received registration error: %v", ackMessage.Error)

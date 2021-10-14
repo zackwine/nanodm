@@ -23,6 +23,7 @@ func (ts *TestSource) GetObjects(objectNames []string) (objects []nanodm.Object,
 	var errString string
 	for _, name := range objectNames {
 		if object, ok := ts.objectMap[name]; ok {
+
 			if object.Type == nanodm.TypeDynamicList {
 				for dynObjName, dynObject := range ts.objectMap {
 					if strings.HasPrefix(dynObjName, name) && dynObjName != name {
@@ -30,6 +31,7 @@ func (ts *TestSource) GetObjects(objectNames []string) (objects []nanodm.Object,
 						objects = append(objects, dynObject)
 					}
 				}
+
 			} else {
 				object.Value = ts.objectValues[name]
 				objects = append(objects, object)
@@ -393,6 +395,7 @@ func TestServerSet(t *testing.T) {
 	err = server.Set(nanodm.Object{
 		Name:  "Device.Custom.Setting1",
 		Value: newValue,
+		Type:  nanodm.TypeString,
 	})
 	assert.Nil(t, err)
 
@@ -566,7 +569,7 @@ func TestServerClientGet(t *testing.T) {
 
 }
 
-func TestServerDynamicList(t *testing.T) {
+func TestServerDynamicListGet(t *testing.T) {
 
 	serverUrl := "tcp://127.0.0.1:4513"
 	sourceName := "testSource"
@@ -621,22 +624,22 @@ func TestServerDynamicList(t *testing.T) {
 		"Device.Custom.Dynamic.0.Value1": {
 			Name:   "Device.Custom.Dynamic.0.Value1",
 			Access: nanodm.AccessRO,
-			Type:   nanodm.TypeDynamicList,
+			Type:   nanodm.TypeString,
 		},
 		"Device.Custom.Dynamic.0.Value2": {
 			Name:   "Device.Custom.Dynamic.0.Value2",
 			Access: nanodm.AccessRO,
-			Type:   nanodm.TypeDynamicList,
+			Type:   nanodm.TypeString,
 		},
 		"Device.Custom.Dynamic.1.Value1": {
 			Name:   "Device.Custom.Dynamic.1.Value1",
 			Access: nanodm.AccessRO,
-			Type:   nanodm.TypeDynamicList,
+			Type:   nanodm.TypeString,
 		},
 		"Device.Custom.Dynamic.1.Value2": {
 			Name:   "Device.Custom.Dynamic.1.Value2",
 			Access: nanodm.AccessRO,
-			Type:   nanodm.TypeDynamicList,
+			Type:   nanodm.TypeString,
 		},
 	}
 
@@ -684,4 +687,133 @@ func TestServerDynamicList(t *testing.T) {
 	log.Infof("objs: %+v", objs)
 	assert.Equal(t, 4, len(objs))
 
+}
+
+func TestServerDynamicListSet(t *testing.T) {
+
+	serverUrl := "tcp://127.0.0.1:4515"
+	sourceName := "testSource"
+	sourceUrl := "tcp://127.0.0.1:4516"
+
+	// Used for registration
+	var objectMapSource = map[string]nanodm.Object{
+		"Device.Custom.Setting1": {
+			Name:   "Device.Custom.Setting1",
+			Access: nanodm.AccessRW,
+			Type:   nanodm.TypeString,
+		},
+		"Device.Custom.Setting2": {
+			Name:   "Device.Custom.Setting2",
+			Access: nanodm.AccessRW,
+			Type:   nanodm.TypeInt,
+		},
+		"Device.Custom.Version": {
+			Name:   "Device.Custom.Version",
+			Access: nanodm.AccessRO,
+			Type:   nanodm.TypeString,
+		},
+		"Device.Custom.Dynamic.": {
+			Name:   "Device.Custom.Dynamic.",
+			Access: nanodm.AccessRO,
+			Type:   nanodm.TypeDynamicList,
+		},
+	}
+
+	// Used for returning data
+	var dynamicObjectMapSource = map[string]nanodm.Object{
+		"Device.Custom.Setting1": {
+			Name:   "Device.Custom.Setting1",
+			Access: nanodm.AccessRW,
+			Type:   nanodm.TypeString,
+		},
+		"Device.Custom.Setting2": {
+			Name:   "Device.Custom.Setting2",
+			Access: nanodm.AccessRW,
+			Type:   nanodm.TypeInt,
+		},
+		"Device.Custom.Version": {
+			Name:   "Device.Custom.Version",
+			Access: nanodm.AccessRO,
+			Type:   nanodm.TypeString,
+		},
+		"Device.Custom.Dynamic.": {
+			Name:   "Device.Custom.Dynamic.",
+			Access: nanodm.AccessRO,
+			Type:   nanodm.TypeDynamicList,
+		},
+		"Device.Custom.Dynamic.0.Value1": {
+			Name:   "Device.Custom.Dynamic.0.Value1",
+			Access: nanodm.AccessRW,
+			Type:   nanodm.TypeString,
+		},
+		"Device.Custom.Dynamic.0.Value2": {
+			Name:   "Device.Custom.Dynamic.0.Value2",
+			Access: nanodm.AccessRO,
+			Type:   nanodm.TypeString,
+		},
+		"Device.Custom.Dynamic.1.Value1": {
+			Name:   "Device.Custom.Dynamic.1.Value1",
+			Access: nanodm.AccessRO,
+			Type:   nanodm.TypeString,
+		},
+		"Device.Custom.Dynamic.1.Value2": {
+			Name:   "Device.Custom.Dynamic.1.Value2",
+			Access: nanodm.AccessRO,
+			Type:   nanodm.TypeString,
+		},
+	}
+
+	var objectValuesSource = map[string]interface{}{
+		"Device.Custom.Setting1":         "8.8.8.8",
+		"Device.Custom.Setting2":         600,
+		"Device.Custom.Version":          "2.3.4",
+		"Device.Custom.Dynamic.0.Value1": "val1",
+		"Device.Custom.Dynamic.0.Value2": "val2",
+		"Device.Custom.Dynamic.1.Value1": "1val1",
+		"Device.Custom.Dynamic.1.Value2": "1val2",
+	}
+
+	log := getLogger()
+
+	// Create a coordinator server
+	testCorrdinator := &TestCoordinator{
+		log: log.WithField("logger", "TestCoordinator"),
+	}
+	server := NewServer(log.WithField("logger", "Server"), serverUrl, testCorrdinator)
+	err := server.Start()
+	assert.Nil(t, err)
+	defer server.Stop()
+
+	// Create a test source
+	testSource := &TestSource{
+		log:          log.WithField("logger", "TestSource"),
+		objectMap:    dynamicObjectMapSource,
+		objectValues: objectValuesSource,
+	}
+	src1 := source.NewSource(log.WithField("logger", "Source"), sourceName, serverUrl, sourceUrl, testSource)
+	err = src1.Connect()
+	assert.Nil(t, err)
+	defer src1.Disconnect()
+
+	err = src1.Register(nanodm.GetObjectsFromMap(objectMapSource))
+	assert.Nil(t, err)
+
+	// Give the registration a few seconds to take
+	<-time.After(2 * time.Second)
+
+	newValue := "newVal!"
+	// Set one of the read-write objects
+	err = server.Set(nanodm.Object{
+		Name:  "Device.Custom.Dynamic.0.Value1",
+		Value: newValue,
+		Type:  nanodm.TypeString,
+	})
+	assert.Nil(t, err)
+
+	objs, errs := server.Get([]string{"Device.Custom.Dynamic.0.Value1"})
+	assert.Zero(t, len(errs), fmt.Sprintf("Unexpected errors returned %v", errs))
+	assert.NotZero(t, len(objs))
+	log.Infof("objs: %+v", objs)
+	assert.Equal(t, 1, len(objs))
+	assert.Equal(t, newValue, objs[0].Value)
 }
