@@ -535,3 +535,16 @@ func (se *Server) isObjectHandledByDynamicList(objectName string) *CoordinatorOb
 	}
 	return nil
 }
+
+//
+// Exported version of isObjectHandledByDynamicList(), but only returns a boolean
+//
+func (se *Server) IsObjectHandledByDynamicList(objectName string) bool {
+	for dynObjName, _ := range se.dynamicLists {
+		if strings.HasPrefix(objectName, dynObjName) {
+			// if objectName has the prefix dynObjName, then return
+			return true
+		}
+	}
+	return false
+}
