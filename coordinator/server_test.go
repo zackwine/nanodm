@@ -320,6 +320,13 @@ func TestServerGet(t *testing.T) {
 	log.Infof("gotObjects: %+v", gotObjects)
 	assert.Equal(t, 1, len(errs))
 	assert.Equal(t, 0, len(gotObjects))
+
+	for objName, expectedVal := range objectValuesSource {
+		retObjs, errs := server.Get([]string{objName})
+		assert.Equal(t, 0, len(errs))
+		assert.Equal(t, 1, len(retObjs))
+		assert.EqualValues(t, expectedVal, retObjs[0].Value)
+	}
 }
 
 func TestServerSet(t *testing.T) {
@@ -403,14 +410,6 @@ func TestServerSet(t *testing.T) {
 	assert.Equal(t, 0, len(errs))
 	assert.Equal(t, 1, len(gotObjects))
 	assert.Equal(t, newValue, gotObjects[0].Value)
-
-	newValue2 := "1.1.1"
-	// Attempt to set read-only
-	err = server.Set(nanodm.Object{
-		Name:  "Device.Custom.Version",
-		Value: newValue2,
-	})
-	assert.NotNil(t, err)
 }
 
 func TestServerUpdate(t *testing.T) {
@@ -557,11 +556,10 @@ func TestServerClientGet(t *testing.T) {
 	<-time.After(2 * time.Second)
 
 	gotObjects, err := src2.GetObjects([]nanodm.Object{{
-		Name:   "Device.Custom.Version",
-		Access: nanodm.AccessRO,
-		Type:   nanodm.TypeString,
+		Name: "Device.Custom.Version",
 	}})
 
+	log.Infof("gotObjects: %+v", gotObjects)
 	// Verify get worked as expected
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(gotObjects))
