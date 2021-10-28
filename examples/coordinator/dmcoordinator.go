@@ -72,7 +72,7 @@ func (ch *ExampleCoordinator) testGetAndSet(server *coordinator.Server) {
 
 func main() {
 
-	url := "tcp://127.0.0.1:4500"
+	url := "tcp://127.0.0.1:4800"
 
 	logrus.SetFormatter(&logrus.TextFormatter{
 		PadLevelText:  true,
