@@ -18,6 +18,8 @@ const (
 	GetMessageType
 	AckMessageType
 	NackMessageType
+	ListMessagesType
+	PingMessageType
 )
 
 type ObjectType uint

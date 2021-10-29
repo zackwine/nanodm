@@ -142,9 +142,9 @@ func startExampleSource2(log *logrus.Entry, coordinatorUrl string, sourceUrl str
 
 func main() {
 
-	coordinatorUrl := "tcp://127.0.0.1:4500"
-	sourceUrl1 := "tcp://127.0.0.1:4501"
-	sourceUrl2 := "tcp://127.0.0.1:4502"
+	coordinatorUrl := "tcp://127.0.0.1:4800"
+	sourceUrl1 := "tcp://127.0.0.1:4801"
+	sourceUrl2 := "tcp://127.0.0.1:4802"
 
 	logrus.SetFormatter(&logrus.TextFormatter{
 		PadLevelText:  true,

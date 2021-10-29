@@ -1,6 +1,8 @@
 package coordinator
 
 import (
+	"time"
+
 	"github.com/sirupsen/logrus"
 	"github.com/zackwine/nanodm"
 )
@@ -16,7 +18,8 @@ type Client struct {
 	pusher     *nanodm.Pusher
 	pusherChan chan nanodm.Message
 
-	objects []nanodm.Object
+	objects  []nanodm.Object
+	lastPing time.Time
 }
 
 func NewClient(log *logrus.Entry, sourceName string, clientUrl string) *Client {

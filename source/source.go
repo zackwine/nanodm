@@ -2,6 +2,7 @@ package source
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -9,7 +10,9 @@ import (
 )
 
 const (
-	defaultAckTimeout = 10 * time.Second
+	defaultAckTimeout      = 10 * time.Second
+	defaultPingCheckPeriod = 15 * time.Second
+	defaultPingTimeout     = 30 * time.Second
 )
 
 type Source struct {
@@ -22,12 +25,15 @@ type Source struct {
 	pusher           *nanodm.Pusher
 	pusherChan       chan nanodm.Message
 	pusherAckTimeout time.Duration
+	objects          []nanodm.Object
 
-	puller      *nanodm.Puller
-	pullerChan  chan nanodm.Message
-	pullerClose chan struct{}
-	ackMap      *nanodm.ConcurrentMessageMap
-	registered  bool
+	puller        *nanodm.Puller
+	pullerChan    chan nanodm.Message
+	pullerClose   chan struct{}
+	ackMap        *nanodm.ConcurrentMessageMap
+	registered    bool
+	lastPing      time.Time
+	lastPingMutex sync.Mutex
 }
 
 type SourceHandler interface {
@@ -79,7 +85,9 @@ func (so *Source) Connect() error {
 		so.pusher.Stop()
 		return err
 	}
+
 	go so.pullerTask()
+	go so.pingTask()
 
 	return nil
 }
@@ -93,6 +101,7 @@ func (so *Source) Disconnect() error {
 
 func (so *Source) Register(objects []nanodm.Object) error {
 	message := so.newMessage(nanodm.RegisterMessageType)
+	so.objects = objects
 	message.Objects = objects
 	so.pusherChan <- message
 
@@ -134,6 +143,7 @@ func (so *Source) Unregister() error {
 func (so *Source) UpdateObjects(objects []nanodm.Object) error {
 	var err error
 	updateMessage := so.newMessage(nanodm.UpdateObjectsMessageType)
+	so.objects = objects
 	updateMessage.Objects = objects
 	so.pusherChan <- updateMessage
 	// Wait for ack
@@ -190,11 +200,31 @@ func (so *Source) SetObject(object nanodm.Object) error {
 	}
 }
 
+func (so *Source) ListObjects(objects []nanodm.Object) ([]nanodm.Object, error) {
+	var err error
+	getMessage := so.newMessage(nanodm.ListMessagesType)
+	getMessage.Objects = objects
+
+	so.pusherChan <- getMessage
+	// Wait for ack
+	ackMessage, err := so.ackMap.WaitForKey(getMessage.TransactionUID.String(), so.pusherAckTimeout)
+	if err != nil {
+		return nil, err
+	}
+	if ackMessage.Type == nanodm.AckMessageType {
+		return ackMessage.Objects, nil
+	} else if ackMessage.Type == nanodm.NackMessageType {
+		return ackMessage.Objects, fmt.Errorf("received get error: %v", ackMessage.Error)
+	} else {
+		return ackMessage.Objects, fmt.Errorf("received unknown message type (%d)", ackMessage.Type)
+	}
+}
+
 func (so *Source) pullerTask() {
 	for {
 		select {
 		case message := <-so.pullerChan:
-			so.log.Infof("%+v", message)
+			so.log.Infof("Received message: %+v", message)
 			switch {
 			case message.Type == nanodm.AckMessageType || message.Type == nanodm.NackMessageType:
 				so.ackMap.Set(message.TransactionUID.String(), message)
@@ -202,13 +232,43 @@ func (so *Source) pullerTask() {
 				so.handleSet(message)
 			case message.Type == nanodm.GetMessageType:
 				so.handleGet(message)
+			case message.Type == nanodm.PingMessageType:
+				so.updatePing()
+				so.pusherChan <- so.newMessage(nanodm.PingMessageType)
 			}
 		case <-so.pullerClose:
 			so.log.Info("exiting pullerTask")
 			return
 		}
 	}
+}
 
+func (so *Source) updatePing() {
+	so.lastPingMutex.Lock()
+	so.lastPing = time.Now()
+	so.lastPingMutex.Unlock()
+}
+
+func (so *Source) pingTask() {
+
+	for {
+		select {
+		case now := <-time.After(defaultPingCheckPeriod):
+			so.lastPingMutex.Lock()
+			if now.After(so.lastPing.Add(defaultPingTimeout)) {
+				diff := now.Sub(so.lastPing)
+				so.log.Warnf("re-registering client %s, last ping was %s ago", so.name, diff.String())
+				err := so.Register(so.objects)
+				if err != nil {
+					so.log.Errorf("failed to re-register: %v", err)
+				}
+			}
+			so.lastPingMutex.Unlock()
+		case <-so.pullerClose:
+			so.log.Info("exiting pingTask")
+			return
+		}
+	}
 }
 
 func (so *Source) handleSet(setMessage nanodm.Message) {

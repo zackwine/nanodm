@@ -3,10 +3,15 @@ package coordinator
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
 	"github.com/zackwine/nanodm"
+)
+
+const (
+	PING_PERIOD = 15 * time.Second
 )
 
 type Server struct {
@@ -18,10 +23,11 @@ type Server struct {
 	pullerChan chan nanodm.Message
 	closeChan  chan struct{}
 
-	clients      map[string]*Client
-	objects      map[string]*CoordinatorObject
-	dynamicLists map[string]*CoordinatorObject
-	ackMap       *nanodm.ConcurrentMessageMap
+	clients           map[string]*Client
+	objects           map[string]*CoordinatorObject
+	dynamicLists      map[string]*CoordinatorObject
+	ackMap            *nanodm.ConcurrentMessageMap
+	registrationMutex sync.Mutex
 }
 
 type CoordinatorObject struct {
@@ -57,6 +63,8 @@ func (se *Server) Start() error {
 		se.log.Errorf("Failed to start server on %s: %v", se.url, err)
 		return err
 	}
+
+	go se.pingTask()
 
 	return nil
 }
@@ -172,10 +180,14 @@ func (se *Server) handleMessage(message nanodm.Message) {
 	switch {
 	case message.Type == nanodm.RegisterMessageType:
 		se.log.Infof("Registering new client (%s)", message.SourceName)
+		se.registrationMutex.Lock()
 		se.registerClient(message)
+		se.registrationMutex.Unlock()
 	case message.Type == nanodm.UnregisterMessageType:
 		se.log.Infof("Unregistering client (%s)", message.SourceName)
+		se.registrationMutex.Lock()
 		se.unregisterClient(message)
+		se.registrationMutex.Unlock()
 	case message.Type == nanodm.UpdateObjectsMessageType:
 		se.log.Infof("Updating client (%s)", message.SourceName)
 		se.updateObjects(message)
@@ -187,6 +199,10 @@ func (se *Server) handleMessage(message nanodm.Message) {
 		go se.handleClientSet(message)
 	case message.Type == nanodm.AckMessageType || message.Type == nanodm.NackMessageType:
 		se.ackMap.Set(message.TransactionUID.String(), message)
+	case message.Type == nanodm.ListMessagesType:
+		se.handleClientList(message)
+	case message.Type == nanodm.PingMessageType:
+		se.handleClientPing(message)
 	}
 }
 
@@ -196,6 +212,30 @@ func (se *Server) pullerTask() {
 		select {
 		case message := <-se.pullerChan:
 			se.handleMessage(message)
+		case <-se.closeChan:
+			return
+		}
+	}
+}
+
+func (se *Server) pingTask() {
+	defer se.log.Warnf("Exiting server pingTask (%s)", se.url)
+	for {
+		select {
+		case now := <-time.After(PING_PERIOD):
+			// Given this handler runs as a goroutine, block modifications caused by registration
+			se.registrationMutex.Lock()
+			for _, client := range se.clients {
+				if now.After(client.lastPing.Add(5 * PING_PERIOD)) {
+					diff := now.Sub(client.lastPing)
+					se.log.Warnf("removing client %s, last ping was %s ago", client.sourceName, diff.String())
+					se.removeClient(client)
+				}
+				message := client.GetMessage(nanodm.PingMessageType)
+				message.Source = se.url
+				client.Send(message)
+			}
+			se.registrationMutex.Unlock()
 		case <-se.closeChan:
 			return
 		}
@@ -255,6 +295,7 @@ func (se *Server) registerClient(message nanodm.Message) {
 	}
 
 	se.log.Infof("Registered client (%s)", message.SourceName)
+	newClient.lastPing = time.Now()
 	se.clients[message.SourceName] = newClient
 
 	ackMessage := newClient.GetMessage(nanodm.AckMessageType)
@@ -327,16 +368,21 @@ func (se *Server) addObjects(client *Client, objects []nanodm.Object) error {
 	return nil
 }
 
+func (se *Server) removeClient(client *Client) {
+
+	if se.handler != nil {
+		err := se.handler.Unregistered(se, client.sourceName, client.objects)
+		if err != nil {
+			se.log.Errorf("failed in unregister callback: %v", err)
+		}
+	}
+	se.removeObjects(client)
+	delete(se.clients, client.sourceName)
+}
+
 func (se *Server) unregisterClient(message nanodm.Message) {
 	if client, exists := se.clients[message.SourceName]; exists {
-		if se.handler != nil {
-			err := se.handler.Unregistered(se, client.sourceName, client.objects)
-			if err != nil {
-				se.log.Errorf("failed in unregister callback: %v", err)
-			}
-		}
-		se.removeObjects(client)
-		delete(se.clients, message.SourceName)
+		se.removeClient(client)
 
 		// Notify the client they have been unregistered
 		ackMessage := client.GetMessage(nanodm.AckMessageType)
@@ -454,8 +500,19 @@ func (se *Server) updateObjects(message nanodm.Message) {
 	}
 }
 
+func (se *Server) handleClientPing(message nanodm.Message) {
+	if client, exists := se.clients[message.SourceName]; exists {
+		client.lastPing = time.Now()
+	}
+}
+
 func (se *Server) handleClientGet(message nanodm.Message) {
 	var objNames []string
+
+	// Given this handler runs as a goroutine, block modifications caused by registration
+	se.registrationMutex.Lock()
+	defer se.registrationMutex.Unlock()
+
 	if client, exists := se.clients[message.SourceName]; exists {
 		if message.Objects == nil || len(message.Objects) == 0 {
 			se.log.Errorf("Invalid get request with empty objects list")
@@ -487,6 +544,10 @@ func (se *Server) handleClientSet(message nanodm.Message) {
 	var err error
 	var errStr string
 	var failedObjects []nanodm.Object
+
+	// Given this handler runs as a goroutine, block modifications caused by registration
+	se.registrationMutex.Lock()
+	defer se.registrationMutex.Unlock()
 
 	if client, exists := se.clients[message.SourceName]; exists {
 		if message.Objects == nil || len(message.Objects) == 0 {
@@ -520,6 +581,55 @@ func (se *Server) handleClientSet(message nanodm.Message) {
 
 	} else {
 		se.log.Errorf("Error set client (%s) it isn't a registered client? %+v", message.SourceName, message)
+	}
+}
+
+func (se *Server) List(path string) (objects []nanodm.Object, err error) {
+
+	if strings.HasSuffix(path, ".") {
+		for objName, regObject := range se.objects {
+			if strings.HasPrefix(objName, path) {
+				objects = append(objects, regObject.object)
+			}
+		}
+	} else if regObject, exists := se.objects[path]; exists {
+		objects = append(objects, regObject.object)
+	} else {
+		err = fmt.Errorf("failed to find object at path %s", path)
+	}
+
+	return
+}
+
+func (se *Server) handleClientList(message nanodm.Message) {
+
+	var retObjects []nanodm.Object
+
+	if client, exists := se.clients[message.SourceName]; exists {
+		if message.Objects == nil || len(message.Objects) == 0 {
+			se.log.Errorf("Invalid get request with empty objects list")
+			se.respondNack(client, message, "Invalid get request with empty objects list")
+			return
+		}
+
+		for _, obj := range message.Objects {
+			objects, err := se.List(obj.Name)
+			if err != nil {
+				errStr := fmt.Sprintf("Failed to get objects with %v", err)
+				se.log.Errorf(errStr)
+				se.respondNack(client, message, errStr)
+				return
+			}
+			retObjects = append(retObjects, objects...)
+		}
+
+		ackMessage := client.GetMessage(nanodm.AckMessageType)
+		ackMessage.TransactionUID = message.TransactionUID
+		ackMessage.Source = se.url
+		ackMessage.Objects = retObjects
+		client.Send(ackMessage)
+	} else {
+		se.log.Errorf("Error get client (%s) it isn't a registered client? %+v", message.SourceName, message)
 	}
 }
 
