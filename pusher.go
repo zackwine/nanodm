@@ -1,6 +1,8 @@
 package nanodm
 
 import (
+	"time"
+
 	"github.com/sirupsen/logrus"
 	"github.com/vmihailenco/msgpack/v5"
 	"nanomsg.org/go/mangos/v2"
@@ -8,6 +10,11 @@ import (
 
 	// register transports
 	_ "nanomsg.org/go/mangos/v2/transport/tcp"
+)
+
+const (
+	RETRY_PERIOD     = 2 * time.Second
+	MAX_RETRY_PERIOD = time.Minute
 )
 
 type Pusher struct {
@@ -58,9 +65,18 @@ func (pu *Pusher) connect() error {
 		return err
 	}
 
-	if err = pu.pushSock.Dial(pu.url); err != nil {
-		logrus.Errorf("can't dial (%s) push socket: %v", pu.url, err)
-		return err
+	err = pu.pushSock.Dial(pu.url)
+	retryWait := RETRY_PERIOD
+
+	// Retry forever with progressive backoff
+	for err != nil {
+
+		if retryWait < MAX_RETRY_PERIOD {
+			retryWait = retryWait * 2
+		}
+		logrus.Errorf("failed to dial (%s) push socket retry in (%v), error: %v", pu.url, retryWait, err)
+		<-time.After(retryWait)
+		err = pu.pushSock.Dial(pu.url)
 	}
 
 	return nil
