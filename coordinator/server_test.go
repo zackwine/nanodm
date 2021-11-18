@@ -57,14 +57,16 @@ func (ts *TestSource) SetObjects(objects []nanodm.Object) error {
 	return nil
 }
 
-func (ts *TestSource) AddRow(objects nanodm.Object) error {
+func (ts *TestSource) AddRow(objects nanodm.Object) (row string, err error) {
 	ts.log.Infof("Calling AddRow %+v", objects)
 
 	parameterMap, typeOk := objects.Value.(map[string]interface{})
 	if !typeOk {
 		ts.log.Errorf("object value type is not map[string]interface{}")
-		return fmt.Errorf("object value type is not map[string]interface{}")
+		return "", fmt.Errorf("object value type is not map[string]interface{}")
 	}
+
+	rowName := fmt.Sprintf("%s%d.", objects.Name, ts.nextIndex)
 	for paramName, paramValue := range parameterMap {
 		objName := fmt.Sprintf("%s%d.%s", objects.Name, ts.nextIndex, paramName)
 		ts.log.Infof("Adding object %s", objName)
@@ -76,7 +78,7 @@ func (ts *TestSource) AddRow(objects nanodm.Object) error {
 		}
 	}
 	ts.nextIndex++
-	return nil
+	return rowName, nil
 }
 
 func (ex *TestSource) DeleteRow(row nanodm.Object) error {
@@ -983,13 +985,14 @@ func TestServerDynamicListAddAndDeleteRow(t *testing.T) {
 	}
 
 	// Add Row to dynamic list entry
-	err = server.AddRow(nanodm.Object{
+	row, err := server.AddRow(nanodm.Object{
 		Name:  "Device.Custom.Dynamic.",
 		Value: newRow,
 		Type:  nanodm.TypeRow,
 	})
 
 	assert.Nil(t, err)
+	log.Infof("Added row (%s)", row)
 
 	// Check a new index was added
 	newIndexObjName := fmt.Sprintf("Device.Custom.Dynamic.%d.Description", nextIndex)

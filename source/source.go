@@ -39,7 +39,7 @@ type Source struct {
 type SourceHandler interface {
 	GetObjects(objectNames []string) (objects []nanodm.Object, err error)
 	SetObjects(objects []nanodm.Object) error
-	AddRow(objects nanodm.Object) error
+	AddRow(objects nanodm.Object) (row string, err error)
 	DeleteRow(row nanodm.Object) error
 }
 
@@ -336,7 +336,7 @@ func (so *Source) handleAddRow(addRowMessage nanodm.Message) {
 		return
 	}
 
-	err := so.handler.AddRow(addRowMessage.Objects[0])
+	row, err := so.handler.AddRow(addRowMessage.Objects[0])
 	if err != nil {
 		so.respondNack(addRowMessage, err.Error())
 		return
@@ -344,6 +344,7 @@ func (so *Source) handleAddRow(addRowMessage nanodm.Message) {
 
 	ackMessage := so.newMessage(nanodm.AckMessageType)
 	ackMessage.TransactionUID = addRowMessage.TransactionUID
+	ackMessage.Objects = append(ackMessage.Objects, nanodm.Object{Name: row})
 	so.pusherChan <- ackMessage
 }
 

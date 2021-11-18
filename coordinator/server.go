@@ -140,7 +140,7 @@ func (se *Server) Get(objectNames []string) (objects []nanodm.Object, errs []err
 	return objects, errs
 }
 
-func (se *Server) AddRow(object nanodm.Object) error {
+func (se *Server) AddRow(object nanodm.Object) (row string, err error) {
 	var addRowMessage nanodm.Message
 
 	if dynObject := se.isObjectHandledByDynamicList(object.Name); dynObject != nil {
@@ -150,19 +150,22 @@ func (se *Server) AddRow(object nanodm.Object) error {
 		addRowMessage.Objects = []nanodm.Object{object}
 		dynObject.client.Send(addRowMessage)
 	} else {
-		return fmt.Errorf("the object %s isn't handled", object.Name)
+		return row, fmt.Errorf("the object %s isn't handled", object.Name)
 	}
 
 	ackMessage, err := se.ackMap.WaitForKey(addRowMessage.TransactionUID.String(), 10*time.Second)
 	if err != nil {
-		return err
+		return row, err
 	}
 	if ackMessage.Type == nanodm.AckMessageType {
-		return nil
+		if len(ackMessage.Objects) == 1 {
+			row = ackMessage.Objects[0].Name
+		}
+		return row, nil
 	} else if ackMessage.Type == nanodm.NackMessageType {
-		return fmt.Errorf("failed to add row %s: %v", object.Name, ackMessage.Error)
+		return row, fmt.Errorf("failed to add row %s: %v", object.Name, ackMessage.Error)
 	} else {
-		return fmt.Errorf("AddRow received unknown message response type (%d)", ackMessage.Type)
+		return row, fmt.Errorf("AddRow received unknown message response type (%d)", ackMessage.Type)
 	}
 
 }

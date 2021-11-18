@@ -25,22 +25,25 @@ Any calls to get/set the object `Device.DeviceInfo.MemoryStatus.Total` would be 
 
 ## Source Example
 
-A source must implement the GetObjects/SetObjects/AddRow handlers interface.
+A source must implement the GetObjects/SetObjects/AddRow/DeleteRow handlers interface.
 
 ```golang
 type ExampleSource struct {}
 
+// Called by the coordinator to get objects registered by this source
 func (ex *ExampleSource) GetObjects(objectNames []string) (objects []nanodm.Object, err error) {
     return objects, err
 }
 
+// Called by the coordinator to set objects registered by this source
 func (ex *ExampleSource) SetObjects(objects []nanodm.Object) error {
     return nil
 }
 
 // Called to add a row to a dynamic list.  For example:  Device.NAT.PortMapping.{i}.
-func (ex *ExampleSource) AddRow(objects nanodm.Object) error {
-    return nil
+// Should return the name of the newly created row
+func (ex *ExampleSource) AddRow(objects nanodm.Object) (row string, err error) {
+    return row, err
 }
 
 // Called to delete a row to a dynamic list.  For example:  Device.NAT.PortMapping.{i}.
@@ -152,17 +155,18 @@ newRow := map[string]interface{}{
 }
 
 // Add Row to dynamic list entry
-err = server.AddRow(nanodm.Object{
+row, err := server.AddRow(nanodm.Object{
     Name:  "Device.NAT.PortMapping.",
     Value: newRow,
     Type:  nanodm.TypeRow,
 })
+// row will have the new row path including the dynamically allocated index
 ```
 
 Deletes a row to a dynamic list of a source:
 
 ```golang
-err = server.DeleteRow(nanodm.Object{
+err := server.DeleteRow(nanodm.Object{
     Name: "Device.NAT.PortMapping.1",
     Type: nanodm.TypeRow,
 })

@@ -102,15 +102,16 @@ func (ex *ExampleSource) SetObjects(objects []nanodm.Object) error {
 	return nil
 }
 
-func (ex *ExampleSource) AddRow(objects nanodm.Object) error {
+func (ex *ExampleSource) AddRow(objects nanodm.Object) (row string, err error) {
 
 	ex.log.Infof("[%s] Called AddRow with objects: %+v", ex.sourceName, objects)
 	parameterMap, typeOk := objects.Value.(map[string]interface{})
 	if !typeOk {
 		ex.log.Errorf("object value type is not map[string]interface{}")
-		return fmt.Errorf("object value type is not map[string]interface{}")
+		return "", fmt.Errorf("object value type is not map[string]interface{}")
 	}
 
+	rowName := fmt.Sprintf("%s%d.", objects.Name, ex.nextPortMapIndex)
 	for paramName, paramValue := range parameterMap {
 		objName := fmt.Sprintf("%s%d.%s", objects.Name, ex.nextPortMapIndex, paramName)
 		ex.log.Infof("Adding object %s", objName)
@@ -121,7 +122,7 @@ func (ex *ExampleSource) AddRow(objects nanodm.Object) error {
 			Type:   nanodm.TypeString,
 		}
 	}
-	return nil
+	return rowName, nil
 }
 
 func (ex *ExampleSource) DeleteRow(row nanodm.Object) error {

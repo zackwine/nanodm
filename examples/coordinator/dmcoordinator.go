@@ -56,7 +56,7 @@ func (ch *ExampleCoordinator) testGetAndSet(server *coordinator.Server) {
 	}
 
 	// Add Row to dynamic list entry
-	err := server.AddRow(nanodm.Object{
+	row, err := server.AddRow(nanodm.Object{
 		Name:  "Device.NAT.PortMapping.",
 		Value: newRow,
 		Type:  nanodm.TypeRow,
@@ -64,6 +64,7 @@ func (ch *ExampleCoordinator) testGetAndSet(server *coordinator.Server) {
 	if err != nil {
 		ch.log.Errorf("Failed to add row: %v", err)
 	}
+	ch.log.Infof("Added row (%s)", row)
 
 	// Get the object that was just set
 	objects, errs := server.Get([]string{"Device.NAT.PortMapping.3.Description", "Device.NAT.PortMapping.3.Enable"})
