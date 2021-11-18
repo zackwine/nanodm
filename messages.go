@@ -20,6 +20,8 @@ const (
 	NackMessageType
 	ListMessagesType
 	PingMessageType
+	AddRowMessageType
+	DeleteRowMessageType
 )
 
 type ObjectType uint
@@ -36,6 +38,7 @@ const (
 	TypeFloat
 	TypeDouble
 	TypeByte
+	TypeRow         ObjectType = 10000000
 	TypeDynamicList ObjectType = 100000000
 )
 

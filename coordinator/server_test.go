@@ -16,6 +16,7 @@ type TestSource struct {
 	log          *logrus.Entry
 	objectMap    map[string]nanodm.Object
 	objectValues map[string]interface{}
+	nextIndex    int
 }
 
 func (ts *TestSource) GetObjects(objectNames []string) (objects []nanodm.Object, err error) {
@@ -53,6 +54,47 @@ func (ts *TestSource) SetObjects(objects []nanodm.Object) error {
 	for _, object := range objects {
 		ts.objectValues[object.Name] = object.Value
 	}
+	return nil
+}
+
+func (ts *TestSource) AddRow(objects nanodm.Object) error {
+	ts.log.Infof("Calling AddRow %+v", objects)
+
+	parameterMap, typeOk := objects.Value.(map[string]interface{})
+	if !typeOk {
+		ts.log.Errorf("object value type is not map[string]interface{}")
+		return fmt.Errorf("object value type is not map[string]interface{}")
+	}
+	for paramName, paramValue := range parameterMap {
+		objName := fmt.Sprintf("%s%d.%s", objects.Name, ts.nextIndex, paramName)
+		ts.log.Infof("Adding object %s", objName)
+		ts.objectValues[objName] = paramValue
+		ts.objectMap[objName] = nanodm.Object{
+			Name:   objName,
+			Access: nanodm.AccessRW,
+			Type:   nanodm.TypeString,
+		}
+	}
+	ts.nextIndex++
+	return nil
+}
+
+func (ex *TestSource) DeleteRow(row nanodm.Object) error {
+	ex.log.Infof("Called DeleteRow for: %s", row.Name)
+	var toDeleteObjs []string
+
+	for objName, _ := range ex.objectMap {
+		if strings.HasPrefix(objName, row.Name) {
+			toDeleteObjs = append(toDeleteObjs, objName)
+		}
+	}
+
+	for _, objName := range toDeleteObjs {
+		ex.log.Infof("Deleting obj (%s)", objName)
+		delete(ex.objectMap, objName)
+		delete(ex.objectValues, objName)
+	}
+
 	return nil
 }
 
@@ -99,9 +141,9 @@ func getLogger() *logrus.Entry {
 
 func TestServerRegistration(t *testing.T) {
 
-	serverUrl := "tcp://127.0.0.1:4500"
+	serverUrl := "tcp://127.0.0.1:4400"
 	sourceName := "testSource"
-	sourceUrl := "tcp://127.0.0.1:4501"
+	sourceUrl := "tcp://127.0.0.1:4401"
 	sourceUrl2 := "tcp://127.0.0.1:4499"
 
 	var objectMapSource = map[string]nanodm.Object{
@@ -814,4 +856,168 @@ func TestServerDynamicListSet(t *testing.T) {
 	log.Infof("objs: %+v", objs)
 	assert.Equal(t, 1, len(objs))
 	assert.Equal(t, newValue, objs[0].Value)
+}
+
+func TestServerDynamicListAddAndDeleteRow(t *testing.T) {
+
+	serverUrl := "tcp://127.0.0.1:4517"
+	sourceName := "testSource"
+	sourceUrl := "tcp://127.0.0.1:4518"
+
+	// Used for registration
+	var objectMapSource = map[string]nanodm.Object{
+		"Device.Custom.Setting1": {
+			Name:   "Device.Custom.Setting1",
+			Access: nanodm.AccessRW,
+			Type:   nanodm.TypeString,
+		},
+		"Device.Custom.Setting2": {
+			Name:   "Device.Custom.Setting2",
+			Access: nanodm.AccessRW,
+			Type:   nanodm.TypeInt,
+		},
+		"Device.Custom.Version": {
+			Name:   "Device.Custom.Version",
+			Access: nanodm.AccessRO,
+			Type:   nanodm.TypeString,
+		},
+		"Device.Custom.Dynamic.": {
+			Name:   "Device.Custom.Dynamic.",
+			Access: nanodm.AccessRO,
+			Type:   nanodm.TypeDynamicList,
+		},
+	}
+
+	// Used for returning data
+	var dynamicObjectMapSource = map[string]nanodm.Object{
+		"Device.Custom.Setting1": {
+			Name:   "Device.Custom.Setting1",
+			Access: nanodm.AccessRW,
+			Type:   nanodm.TypeString,
+		},
+		"Device.Custom.Setting2": {
+			Name:   "Device.Custom.Setting2",
+			Access: nanodm.AccessRW,
+			Type:   nanodm.TypeInt,
+		},
+		"Device.Custom.Version": {
+			Name:   "Device.Custom.Version",
+			Access: nanodm.AccessRO,
+			Type:   nanodm.TypeString,
+		},
+		"Device.Custom.Dynamic.": {
+			Name:   "Device.Custom.Dynamic.",
+			Access: nanodm.AccessRO,
+			Type:   nanodm.TypeDynamicList,
+		},
+		"Device.Custom.Dynamic.0.Value1": {
+			Name:   "Device.Custom.Dynamic.0.Value1",
+			Access: nanodm.AccessRW,
+			Type:   nanodm.TypeString,
+		},
+		"Device.Custom.Dynamic.0.Value2": {
+			Name:   "Device.Custom.Dynamic.0.Value2",
+			Access: nanodm.AccessRO,
+			Type:   nanodm.TypeString,
+		},
+		"Device.Custom.Dynamic.1.Value1": {
+			Name:   "Device.Custom.Dynamic.1.Value1",
+			Access: nanodm.AccessRO,
+			Type:   nanodm.TypeString,
+		},
+		"Device.Custom.Dynamic.1.Value2": {
+			Name:   "Device.Custom.Dynamic.1.Value2",
+			Access: nanodm.AccessRO,
+			Type:   nanodm.TypeString,
+		},
+	}
+
+	var objectValuesSource = map[string]interface{}{
+		"Device.Custom.Setting1":         "8.8.8.8",
+		"Device.Custom.Setting2":         600,
+		"Device.Custom.Version":          "2.3.4",
+		"Device.Custom.Dynamic.0.Value1": "val1",
+		"Device.Custom.Dynamic.0.Value2": "val2",
+		"Device.Custom.Dynamic.1.Value1": "1val1",
+		"Device.Custom.Dynamic.1.Value2": "1val2",
+	}
+
+	nextIndex := 2
+
+	log := getLogger()
+
+	// Create a coordinator server
+	testCorrdinator := &TestCoordinator{
+		log: log.WithField("logger", "TestCoordinator"),
+	}
+	server := NewServer(log.WithField("logger", "Server"), serverUrl, testCorrdinator)
+	err := server.Start()
+	assert.Nil(t, err)
+	defer server.Stop()
+
+	// Create a test source
+	testSource := &TestSource{
+		log:          log.WithField("logger", "TestSource"),
+		objectMap:    dynamicObjectMapSource,
+		objectValues: objectValuesSource,
+		nextIndex:    nextIndex,
+	}
+	src1 := source.NewSource(log.WithField("logger", "Source"), sourceName, serverUrl, sourceUrl, testSource)
+	err = src1.Connect()
+	assert.Nil(t, err)
+	defer src1.Disconnect()
+
+	err = src1.Register(nanodm.GetObjectsFromMap(objectMapSource))
+	assert.Nil(t, err)
+
+	// Give the registration a few seconds to take
+	<-time.After(2 * time.Second)
+
+	newRow := map[string]interface{}{
+		"Description":          "Test",
+		"Enable":               "false",
+		"ExternalPort":         "210",
+		"ExternalPortEndRange": "210",
+		"InternalClient":       "10.0.0.48",
+		"Protocol":             "BOTH",
+	}
+
+	// Add Row to dynamic list entry
+	err = server.AddRow(nanodm.Object{
+		Name:  "Device.Custom.Dynamic.",
+		Value: newRow,
+		Type:  nanodm.TypeRow,
+	})
+
+	assert.Nil(t, err)
+
+	// Check a new index was added
+	newIndexObjName := fmt.Sprintf("Device.Custom.Dynamic.%d.Description", nextIndex)
+	objs, errs := server.Get([]string{newIndexObjName})
+	assert.Zero(t, len(errs), fmt.Sprintf("Unexpected errors returned %v", errs))
+	assert.NotZero(t, len(objs))
+	log.Infof("objs: %+v", objs)
+	assert.Equal(t, 1, len(objs))
+	assert.Equal(t, "Test", objs[0].Value)
+
+	newIndexObjName = fmt.Sprintf("Device.Custom.Dynamic.%d.ExternalPort", nextIndex)
+	objs, errs = server.Get([]string{newIndexObjName})
+	assert.Zero(t, len(errs), fmt.Sprintf("Unexpected errors returned %v", errs))
+	assert.NotZero(t, len(objs))
+	log.Infof("objs: %+v", objs)
+	assert.Equal(t, 1, len(objs))
+	assert.Equal(t, "210", objs[0].Value)
+
+	// Delete
+	rowObjName := fmt.Sprintf("Device.Custom.Dynamic.%d.", nextIndex)
+	err = server.DeleteRow(nanodm.Object{
+		Name: rowObjName,
+		Type: nanodm.TypeRow,
+	})
+	assert.Nil(t, err)
+
+	// Verify a get fails on the now removed row entries
+	objs, errs = server.Get([]string{newIndexObjName})
+	assert.NotZero(t, len(errs), "Should have received an error for deleted entry")
+
 }
