@@ -46,6 +46,54 @@ func (ch *ExampleCoordinator) printObjects(server *coordinator.Server) {
 
 func (ch *ExampleCoordinator) testGetAndSet(server *coordinator.Server) {
 
+	newRow := map[string]interface{}{
+		"Description":          "Test",
+		"Enable":               false,
+		"ExternalPort":         "210",
+		"ExternalPortEndRange": "210",
+		"InternalClient":       "10.0.0.48",
+		"Protocol":             "BOTH",
+	}
+
+	// Add Row to dynamic list entry
+	err := server.AddRow(nanodm.Object{
+		Name:  "Device.NAT.PortMapping.",
+		Value: newRow,
+		Type:  nanodm.TypeRow,
+	})
+	if err != nil {
+		ch.log.Errorf("Failed to add row: %v", err)
+	}
+
+	// Get the object that was just set
+	objects, errs := server.Get([]string{"Device.NAT.PortMapping.3.Description", "Device.NAT.PortMapping.3.Enable"})
+	if len(errs) > 0 {
+		ch.log.Errorf("Failed to get object: %v", errs)
+	}
+	ch.log.Infof("%+v", objects)
+
+	// Set one of the read-write objects
+	err = server.Set(nanodm.Object{
+		Name:  "Device.NAT.PortMapping.3.Enable",
+		Value: true,
+	})
+	if err != nil {
+		ch.log.Errorf("Failed to set new row: %v", err)
+	}
+
+	err = server.DeleteRow(nanodm.Object{
+		Name: "Device.NAT.PortMapping.3",
+		Type: nanodm.TypeRow,
+	})
+	if err != nil {
+		ch.log.Errorf("Failed to set new row: %v", err)
+	}
+
+	ch.testAddAndDeleteRow(server)
+}
+
+func (ch *ExampleCoordinator) testAddAndDeleteRow(server *coordinator.Server) {
+
 	// Get some of the example objects
 	objects, errs := server.Get([]string{"Device.DeviceInfo.Version", "Device.DeviceInfo.Serial", "Device.Custom.Setting1", "Device.Custom.Setting2", "Device.Custom.Version"})
 	if len(errs) > 0 {

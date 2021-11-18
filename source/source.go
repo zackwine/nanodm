@@ -39,6 +39,8 @@ type Source struct {
 type SourceHandler interface {
 	GetObjects(objectNames []string) (objects []nanodm.Object, err error)
 	SetObjects(objects []nanodm.Object) error
+	AddRow(objects nanodm.Object) error
+	DeleteRow(row nanodm.Object) error
 }
 
 // NewSource creates a new source where `name` should be unique to the
@@ -232,6 +234,10 @@ func (so *Source) pullerTask() {
 				so.handleSet(message)
 			case message.Type == nanodm.GetMessageType:
 				so.handleGet(message)
+			case message.Type == nanodm.AddRowMessageType:
+				so.handleAddRow(message)
+			case message.Type == nanodm.DeleteRowMessageType:
+				so.handleDeleteRow(message)
 			case message.Type == nanodm.PingMessageType:
 				so.updatePing()
 				so.pusherChan <- so.newMessage(nanodm.PingMessageType)
@@ -271,21 +277,23 @@ func (so *Source) pingTask() {
 	}
 }
 
+func (so *Source) respondNack(msg nanodm.Message, errStr string) {
+	nackMessasge := so.newMessage(nanodm.NackMessageType)
+	nackMessasge.TransactionUID = msg.TransactionUID
+	nackMessasge.Error = errStr
+	so.pusherChan <- nackMessasge
+}
+
 func (so *Source) handleSet(setMessage nanodm.Message) {
 	if so.handler == nil {
-		nackMessasge := so.newMessage(nanodm.NackMessageType)
-		nackMessasge.TransactionUID = setMessage.TransactionUID
-		nackMessasge.Error = "source handler not set"
-		so.pusherChan <- nackMessasge
+		so.respondNack(setMessage, "source handler not set")
 		return
 	}
 
 	err := so.handler.SetObjects(setMessage.Objects)
 	if err != nil {
-		nackMessasge := so.newMessage(nanodm.NackMessageType)
-		nackMessasge.TransactionUID = setMessage.TransactionUID
-		nackMessasge.Error = err.Error()
-		so.pusherChan <- nackMessasge
+		so.respondNack(setMessage, err.Error())
+		return
 	}
 
 	ackMessage := so.newMessage(nanodm.AckMessageType)
@@ -296,10 +304,7 @@ func (so *Source) handleSet(setMessage nanodm.Message) {
 func (so *Source) handleGet(getMessage nanodm.Message) {
 
 	if so.handler == nil {
-		nackMessasge := so.newMessage(nanodm.NackMessageType)
-		nackMessasge.TransactionUID = getMessage.TransactionUID
-		nackMessasge.Error = "source handler not set"
-		so.pusherChan <- nackMessasge
+		so.respondNack(getMessage, "source handler not set")
 		return
 	}
 
@@ -310,14 +315,56 @@ func (so *Source) handleGet(getMessage nanodm.Message) {
 	}
 	objects, err := so.handler.GetObjects(objectNames)
 	if err != nil {
-		nackMessasge := so.newMessage(nanodm.NackMessageType)
-		nackMessasge.TransactionUID = getMessage.TransactionUID
-		nackMessasge.Error = err.Error()
-		so.pusherChan <- nackMessasge
+		so.respondNack(getMessage, err.Error())
+		return
 	}
 
 	ackMessage := so.newMessage(nanodm.AckMessageType)
 	ackMessage.TransactionUID = getMessage.TransactionUID
 	ackMessage.Objects = objects
+	so.pusherChan <- ackMessage
+}
+
+func (so *Source) handleAddRow(addRowMessage nanodm.Message) {
+	if so.handler == nil {
+		so.respondNack(addRowMessage, "source handler not set")
+		return
+	}
+
+	if len(addRowMessage.Objects) != 1 {
+		so.respondNack(addRowMessage, fmt.Sprintf("Invalid number of objects (%d) in add row", len(addRowMessage.Objects)))
+		return
+	}
+
+	err := so.handler.AddRow(addRowMessage.Objects[0])
+	if err != nil {
+		so.respondNack(addRowMessage, err.Error())
+		return
+	}
+
+	ackMessage := so.newMessage(nanodm.AckMessageType)
+	ackMessage.TransactionUID = addRowMessage.TransactionUID
+	so.pusherChan <- ackMessage
+}
+
+func (so *Source) handleDeleteRow(deleteRowMessage nanodm.Message) {
+	if so.handler == nil {
+		so.respondNack(deleteRowMessage, "source handler not set")
+		return
+	}
+
+	if len(deleteRowMessage.Objects) != 1 {
+		so.respondNack(deleteRowMessage, fmt.Sprintf("Invalid number of objects (%d) in delete row", len(deleteRowMessage.Objects)))
+		return
+	}
+
+	err := so.handler.DeleteRow(deleteRowMessage.Objects[0])
+	if err != nil {
+		so.respondNack(deleteRowMessage, err.Error())
+		return
+	}
+
+	ackMessage := so.newMessage(nanodm.AckMessageType)
+	ackMessage.TransactionUID = deleteRowMessage.TransactionUID
 	so.pusherChan <- ackMessage
 }

@@ -140,6 +140,60 @@ func (se *Server) Get(objectNames []string) (objects []nanodm.Object, errs []err
 	return objects, errs
 }
 
+func (se *Server) AddRow(object nanodm.Object) error {
+	var addRowMessage nanodm.Message
+
+	if dynObject := se.isObjectHandledByDynamicList(object.Name); dynObject != nil {
+		se.log.Infof("Calling AddRow on object on dynamic list (%+v) %+v", object, dynObject.object)
+		addRowMessage = dynObject.client.GetMessage(nanodm.AddRowMessageType)
+		addRowMessage.Source = se.url
+		addRowMessage.Objects = []nanodm.Object{object}
+		dynObject.client.Send(addRowMessage)
+	} else {
+		return fmt.Errorf("the object %s isn't handled", object.Name)
+	}
+
+	ackMessage, err := se.ackMap.WaitForKey(addRowMessage.TransactionUID.String(), 10*time.Second)
+	if err != nil {
+		return err
+	}
+	if ackMessage.Type == nanodm.AckMessageType {
+		return nil
+	} else if ackMessage.Type == nanodm.NackMessageType {
+		return fmt.Errorf("failed to add row %s: %v", object.Name, ackMessage.Error)
+	} else {
+		return fmt.Errorf("AddRow received unknown message response type (%d)", ackMessage.Type)
+	}
+
+}
+
+func (se *Server) DeleteRow(object nanodm.Object) error {
+	var deleteRowMessage nanodm.Message
+
+	if dynObject := se.isObjectHandledByDynamicList(object.Name); dynObject != nil {
+		se.log.Infof("Calling DeleteRow on object on dynamic list (%+v) %+v", object, dynObject.object)
+		deleteRowMessage = dynObject.client.GetMessage(nanodm.DeleteRowMessageType)
+		deleteRowMessage.Source = se.url
+		deleteRowMessage.Objects = []nanodm.Object{object}
+		dynObject.client.Send(deleteRowMessage)
+	} else {
+		return fmt.Errorf("the object %s isn't handled", object.Name)
+	}
+
+	ackMessage, err := se.ackMap.WaitForKey(deleteRowMessage.TransactionUID.String(), 10*time.Second)
+	if err != nil {
+		return err
+	}
+	if ackMessage.Type == nanodm.AckMessageType {
+		return nil
+	} else if ackMessage.Type == nanodm.NackMessageType {
+		return fmt.Errorf("failed to delete row %s: %v", object.Name, ackMessage.Error)
+	} else {
+		return fmt.Errorf("DeleteRow received unknown message response type (%d)", ackMessage.Type)
+	}
+
+}
+
 // PrintObjectMap: For debugging purposes
 func (se *Server) PrintObjectMap() {
 

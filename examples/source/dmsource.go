@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -27,6 +28,12 @@ var objectMapSource1 = map[string]nanodm.Object{
 		Name:   "Device.DeviceInfo.Reboot",
 		Access: nanodm.AccessRW,
 		Type:   nanodm.TypeBool,
+	},
+	// A dynamic list example
+	"Device.NAT.PortMapping.": {
+		Name:   "Device.NAT.PortMapping.",
+		Access: nanodm.AccessRW,
+		Type:   nanodm.TypeDynamicList,
 	},
 }
 
@@ -61,11 +68,12 @@ var objectValuesSource2 = map[string]interface{}{
 }
 
 type ExampleSource struct {
-	log          *logrus.Entry
-	sourceName   string
-	objectMap    map[string]nanodm.Object
-	objectValues map[string]interface{}
-	objects      []nanodm.Object
+	log              *logrus.Entry
+	sourceName       string
+	objectMap        map[string]nanodm.Object
+	objectValues     map[string]interface{}
+	objects          []nanodm.Object
+	nextPortMapIndex int
 }
 
 func (ex *ExampleSource) GetObjects(objectNames []string) (objects []nanodm.Object, err error) {
@@ -94,6 +102,46 @@ func (ex *ExampleSource) SetObjects(objects []nanodm.Object) error {
 	return nil
 }
 
+func (ex *ExampleSource) AddRow(objects nanodm.Object) error {
+
+	ex.log.Infof("[%s] Called AddRow with objects: %+v", ex.sourceName, objects)
+	parameterMap, typeOk := objects.Value.(map[string]interface{})
+	if !typeOk {
+		ex.log.Errorf("object value type is not map[string]interface{}")
+		return fmt.Errorf("object value type is not map[string]interface{}")
+	}
+
+	for paramName, paramValue := range parameterMap {
+		objName := fmt.Sprintf("%s%d.%s", objects.Name, ex.nextPortMapIndex, paramName)
+		ex.log.Infof("Adding object %s", objName)
+		ex.objectValues[objName] = paramValue
+		ex.objectMap[objName] = nanodm.Object{
+			Name:   objName,
+			Access: nanodm.AccessRW,
+			Type:   nanodm.TypeString,
+		}
+	}
+	return nil
+}
+
+func (ex *ExampleSource) DeleteRow(row nanodm.Object) error {
+	ex.log.Infof("[%s] Called DeleteRow for: %s", ex.sourceName, row.Name)
+	var toDeleteObjs []string
+
+	for objName, _ := range ex.objectMap {
+		if strings.HasPrefix(objName, row.Name) {
+			toDeleteObjs = append(toDeleteObjs, objName)
+		}
+	}
+
+	for _, objName := range toDeleteObjs {
+		delete(ex.objectMap, objName)
+		delete(ex.objectValues, objName)
+	}
+
+	return nil
+}
+
 func startExampleSource1(log *logrus.Entry, coordinatorUrl string, sourceUrl string, sourceName string) *source.Source {
 
 	// Create an ExampleSource that implements SourceHandler
@@ -114,6 +162,38 @@ func startExampleSource1(log *logrus.Entry, coordinatorUrl string, sourceUrl str
 	if err != nil {
 		log.Errorf("Failed to register client objects: %v", err)
 	}
+
+	// Add a few dynamic objects to the list
+	example.objectMap["Device.NAT.PortMapping.1.Description"] = nanodm.Object{
+		Name:   "Device.NAT.PortMapping.1.Description",
+		Access: nanodm.AccessRW,
+		Type:   nanodm.TypeString,
+	}
+	example.objectValues["Device.NAT.PortMapping.1.Description"] = "Test"
+
+	example.objectMap["Device.NAT.PortMapping.1.Enable"] = nanodm.Object{
+		Name:   "Device.NAT.PortMapping.1.Enable",
+		Access: nanodm.AccessRW,
+		Type:   nanodm.TypeBool,
+	}
+	example.objectValues["Device.NAT.PortMapping.1.Enable"] = false
+
+	example.objectMap["Device.NAT.PortMapping.2.Description"] = nanodm.Object{
+		Name:   "Device.NAT.PortMapping.2.Description",
+		Access: nanodm.AccessRW,
+		Type:   nanodm.TypeString,
+	}
+	example.objectValues["Device.NAT.PortMapping.2.Description"] = "Test2"
+
+	example.objectMap["Device.NAT.PortMapping.2.Enable"] = nanodm.Object{
+		Name:   "Device.NAT.PortMapping.2.Enable",
+		Access: nanodm.AccessRW,
+		Type:   nanodm.TypeBool,
+	}
+	example.objectValues["Device.NAT.PortMapping.2.Enable"] = false
+
+	example.nextPortMapIndex = 3
+
 	return source
 }
 

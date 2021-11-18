@@ -25,16 +25,26 @@ Any calls to get/set the object `Device.DeviceInfo.MemoryStatus.Total` would be 
 
 ## Source Example
 
-A source must implement the GetObjects/SetObjects handler interface.
+A source must implement the GetObjects/SetObjects/AddRow handlers interface.
 
 ```golang
 type ExampleSource struct {}
 
 func (ex *ExampleSource) GetObjects(objectNames []string) (objects []nanodm.Object, err error) {
-    return
+    return objects, err
 }
 
 func (ex *ExampleSource) SetObjects(objects []nanodm.Object) error {
+    return nil
+}
+
+// Called to add a row to a dynamic list.  For example:  Device.NAT.PortMapping.{i}.
+func (ex *ExampleSource) AddRow(objects nanodm.Object) error {
+    return nil
+}
+
+// Called to delete a row to a dynamic list.  For example:  Device.NAT.PortMapping.{i}.
+func (ex *ExampleSource) DeleteRow(row nanodm.Object) error {
     return nil
 }
 ```
@@ -53,15 +63,28 @@ source := source.NewSource(log, sourceName, coordinatorUrl, sourceUrl, exampleSo
 // Connect
 source.Connect()
 
+// Register a static DM entry, and a dynamic table/list
 exampleObjects := []nanodm.Object{{
 		Name:   "Device.DeviceInfo.MemoryStatus.Total",
 		Access: nanodm.AccessRO,
 		Type:   nanodm.TypeInt,
-	}}
+	},
+    {
+		Name:   "Device.Custom.Dynamic.",
+		Access: nanodm.AccessRW,
+		Type:   nanodm.TypeDynamicList,
+	},
+}
 // Call register with a list of objects the source owns
-err := source.Register(example.objects)
+err := source.Register(exampleObjects)
+
 ```
 
+Once the example above is registered the server side will route all requests Get
+for the object `Device.DeviceInfo.MemoryStatus.Total` to this source.
+
+Further all requests (Set/Get/AddRow/DeleteRow) for `Device.NAT.PortMapping.*` will
+be routed to this source.
 
 ## Coordinator Server Example
 
@@ -95,6 +118,54 @@ exCoordinator := &ExampleCoordinator{}
 
 server := coordinator.NewServer(log, url, exCoordinator)
 err := server.Start()
+```
+
+Once the server is running the following APIs can be called to access registered sources:
+
+Get an object (or list objects):
+
+```golang
+objs, errs := server.Get([]string{"Device.DeviceInfo.MemoryStatus.Total"})
+```
+
+Set an object:
+
+```golang
+err := server.Set(nanodm.Object{
+    Name:  "Device.WiFi.Radio.0.Enable",
+    Value: true,
+    Type:  nanodm.TypeString,
+})
+```
+
+Add a row to a dynamic list of a source:
+
+```golang
+// Define the new row
+newRow := map[string]interface{}{
+    "Description":          "Test",
+    "Enable":               "false",
+    "ExternalPort":         "210",
+    "ExternalPortEndRange": "210",
+    "InternalClient":       "10.0.0.48",
+    "Protocol":             "BOTH",
+}
+
+// Add Row to dynamic list entry
+err = server.AddRow(nanodm.Object{
+    Name:  "Device.NAT.PortMapping.",
+    Value: newRow,
+    Type:  nanodm.TypeRow,
+})
+```
+
+Deletes a row to a dynamic list of a source:
+
+```golang
+err = server.DeleteRow(nanodm.Object{
+    Name: "Device.NAT.PortMapping.1",
+    Type: nanodm.TypeRow,
+})
 ```
 
 
